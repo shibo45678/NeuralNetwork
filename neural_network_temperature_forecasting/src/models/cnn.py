@@ -1,6 +1,8 @@
-from pydantic import BaseModel,Field,validator
-from typing import List,Optional,Dict,Any,Union
+from pydantic import BaseModel, Field, validator, PositiveInt
+from dataclasses import dataclass,field
+from typing import List, Optional, Dict, Tuple
 import tensorflow as tf
+
 
 # 基于历史六个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点的'T''p'（5*2）
 class CnnModel:
@@ -9,8 +11,8 @@ class CnnModel:
     模型选择：1.适合时间序列回归预测(多个数值特征的回归)：short_sequence_model <20时间步、conv1D
            _build_sequential_model 方便扩展参数列表，支持更多类型的层，针对特定数据集定制最优架构；
                                    简单卷积+全连接
-           _build_parallel_model 多分支设计可能捕捉更丰富的特征，比如短中长期、方便添加注意力机制等组件；
-                                  对于时间序列，没使用全连接层
+           _build_parallel_model 纯CNN模型，多分支设计可能捕捉更丰富的特征，比如短、中、长期
+                                 层级优先，层内分支，合并，再送入下一层（inception风格）
                                   
             2.时间步级别的混合输出类型(数值回归+分类问题）
            _build_mixed_output_model 分类是已经预处理过的分类特征（分类数量较少），没涉及多分类密集向量embedding情况。
@@ -18,25 +20,27 @@ class CnnModel:
     """
 
     # 配置类1：_build_sequential_model 参数配置
-    class SequentialConfig(BaseModel): # 简单cnn + 全连接 ，回归预测
-        filters: List[int] = Field(default=[64,], description="单层卷积层滤波器数量 / 特征通道(数)。len 控制卷积层层数")
-        kernel_sizes: List[int] = Field(default=[3,], description="单层卷积核大小。只需提供'长'，1D'宽'自动适配窗口大小")
-        strides: List[int] = Field(default=[1,], description="单层卷积步长/跨度。在输入数据上滑动的移动步数。步长越大：计算量越少｜保留信息越少｜成本越低")
-        padding: List[str] = Field(default=['same',], description="填充方式。'valid'不填充，序列长度减少，'same'填充，序列长度保持和inputs时间步一致。")
-        activation: List[str] = Field(default=['relu','linear','sigmoid'], description="激活函数。单层的激活函数。代码中[0]用于卷积层，[1]用于全连接层。")
-        dense_units: List[int] = Field(default=[5*19], description="全连接层单元数。值根据输出label形状定，如果只预测5行2列特征5*2；len控制全连接层层数。")
+    class SequentialConfig(BaseModel):  # 简单cnn + 全连接 ，回归预测
+        filters: List[PositiveInt] = Field(default=[64, ],
+                                           description="单层卷积层滤波器数量 / 特征通道(数)。len 控制卷积层层数")
+        kernel_sizes: List[PositiveInt] = Field(default=[3, ],
+                                                description="单层卷积核大小。只需提供'长'，1D'宽'自动适配窗口大小")
+        strides: List[PositiveInt] = Field(default=[1, ],
+                                           description="单层卷积步长/跨度。在输入数据上滑动的移动步数。步长越大：计算量越少｜保留信息越少｜成本越低")
+        padding: List[str] = Field(default=['same', ],
+                                   description="填充方式。'valid'不填充，序列长度减少，'same'填充，序列长度保持和inputs时间步一致。")
+        activation: List[str] = Field(default=['relu', 'linear', 'sigmoid'],
+                                      description="激活函数。单层的激活函数。代码中[0]用于卷积层，[1]用于全连接层。")
+        dense_units: List[PositiveInt] = Field(default=[5 * 19],
+                                               description="全连接层单元数。值根据输出label形状定，如果只预测5行2列特征5*2；len控制全连接层层数。")
         learning_rate: float = Field(default=0.001, description="adam优化器学习率")
 
-        @validator('filters', 'kernel_sizes', 'strides', 'dense_units', each_item=True)
-        def validate_positive_ints(cls, v):
-            if v <= 0:
-                raise ValueError("必须为正整数")
-            return v
         @validator('padding')
         def validate_padding(cls, v):
             if v not in ['padding', 'valid']:
-                raise ValueError("padding必须为padding'或'valid'")
+                raise ValueError("padding必须为'padding'或'valid'")
             return v
+
         @validator('learning_rate')
         def validate_learning_rate(cls, v):
             if not 0 <= v < 1:
@@ -44,36 +48,50 @@ class CnnModel:
             return v
 
     # 配置类2：并行模型配置
-    class ParallelConfig(BaseModel):
-        branch_filters: List[List[int]] = Field(default=[[64], [64]], description="每个分支的滤波器数量")
-        branch_kernels: List[List[int]] = Field(default=[[3], [5]], description="每个分支的卷积核大小")
-        merge_method: str = Field(default='concatenate', description="合并方法: concatenate 或 add")
-        output_filters: int = Field(default=128, description="输出层滤波器数量")
+    class ParallelConfig(BaseModel):  # 多分支、不使用全连接、回归预测
+        input_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(6, 19),
+                                                             description="输入形状，例如 (6, 19) 表示6个时间步，19个特征")
+        output_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(5, 19),
+                                                              description="输出形状。例如 (5,2) 表示预测5个时间步。每个时间步一个值, 2代表输出2个变量")
+        branch_filters:List[List[PositiveInt]]=Field(default = [[32,32],[64,64]],description="每个子列表代表一个层级，子列表中的数字代表该层各个分支的滤波器数量，每个层级都是过滤器先小后大")
+        branch_kernels:List[List[PositiveInt]]= Field(default=[[2, 3],[2,3]],
+                                             description="每个子列表代表一个层级，子列表中的数字代表该层各个分支的kernel_size。控制短期特征、中期特征、长期特征")
+        branch_dilation_rate:List[List[PositiveInt]] = Field(default=[[1, 1],[1,1]],
+                                                      description="膨胀卷积，不增加参数的情况下扩大感受野，善于处理更长期的时间依赖。1是1D的默认值,(kernel_size-1)*dilation_rate+1=3, 1是默认值，长序列可调整")
+        out_features: PositiveInt = Field(default=19, description="输出数值型的特征列数。")
+    @validator('input_shape', 'output_shape')
+    def validate_shape_length(cls, v):
+        if len(v) != 2:
+            raise ValueError(f"形状必须是长度为2的元组，当前长度为{len(v)}")
+        return v
 
-        @validator('merge_method')
-        def validate_merge_method(cls, v):
-            if v not in ['concatenate', 'add']:
-                raise ValueError('merge_method必须为"concatenate"或"add"')
-            return v
+    @validator('out_shape')
+    def validate_output_shape_consistency(cls, v, values):
+        if 'out_features' in values and v[1] != values['out_features']:
+            raise ValueError(
+                f"输出形状的第二维 {v[1]} 必须与 out_features {values['out_features']} 保持一致"
+            )
+        return v
+
+    @validator('branch_filters')
+    def validate_branches(cls, v):
+        for i, layer in enumerate(v):
+            if len(layer) == 0:
+                raise ValueError(f"第 {i} 层必须至少有一个分支")
+        return v
 
     # 配置类3：高级模型配置
-    class AdvancedConfig(BaseModel):
-        num_layers: int = Field(default=3, description="层数")
-        initial_filters: int = Field(default=32, description="初始滤波器数量")
-        filter_growth_rate: float = Field(default=2.0, description="滤波器增长速率")
-        use_residual: bool = Field(default=True, description="是否使用残差连接")
-        use_attention: bool = Field(default=False, description="是否使用注意力机制")
-        dropout_rate: float = Field(default=0.3, description="Dropout比率")
+    class MixedConfig(BaseModel):
+        input_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(6, 19), description="输入形状")
+        regression_features: PositiveInt = Field(default=1, description="输出数值型特征列个数")
+        num_classes: PositiveInt = Field(default=3, description="输出分类型特征的列别数，如三分类012")
+        output_timesteps: PositiveInt = Field(default=5, description="预测labels的时间步")
 
-        @validator('dropout_rate')
-        def validate_dropout_rate(cls, v):
-            if not 0 <= v < 1:
-                raise ValueError('dropout_rate必须在[0, 1)范围内')
+        @validator('input_shape')
+        def validate_shape_length(cls, v):
+            if len(v) != 2:
+                raise ValueError(f"形状必须是长度为2的元组，当前长度为{len(v)}")
             return v
-
-    def __init__(self, input_shape, num_classes):
-        self.input_shape = input_shape
-        self.num_classes = num_classes
 
     def _validate_config(self, config: Optional[Dict], config_class: type) -> BaseModel:
         """通用的验证方法"""
@@ -96,7 +114,7 @@ class CnnModel:
                                 config: dict = None
                                 ) -> tf.keras.Sequential:
 
-        model_config=self._validata_config(config,self.SequentialConfig) # self.Seq
+        model_config = self._validata_config(config, self.SequentialConfig)  # self.Seq
 
         filters = model_config.filters
         kernel_sizes = model_config.kernel_sizes
@@ -104,10 +122,10 @@ class CnnModel:
         padding = model_config.padding
         activation = model_config.activation
         dense_units = model_config.dense_units
-        learning_rate=model_config.learning_rate
+        learning_rate = model_config.learning_rate
 
         model = tf.keras.Sequential()
-        # 添加输入层
+
         # 添加卷积层
         for i, (f, k, s) in enumerate(zip(filters, kernel_sizes, strides)):
             model.add(tf.keras.layers.Conv1D  # 1d是单通道，适合处理文本时间序列，conv2d适合处理图像；
@@ -148,56 +166,52 @@ class CnnModel:
     def _build_parallel_model(self,
                               config=None
                               ) -> tf.keras.Model:
-        """ 多分支、不使用全连接、回归预测
-        :param input_shape: 输入形状，例如 (6, 19) 表示6个时间步，19个特征
-        :param output_type: 输出形状，例如 (5,2) 表示预测5个时间步。每个时间步一个值, 2代表输出2个变量
-        :param kernel_size_list: kernel_size控制短期特征、中期特征、长期特征，长度len代表几个卷积分支
-        :param dilation_rate_list: 控制使用膨胀卷积，在不增加参数的情况下扩大感受野，善于处理更长期的时间依赖。1是1D的默认值.
-                                   (kernel_size-1)*dilation_rate+1=3, 1是默认值，长序列可调整
-        """
-        default_config = {'input_shape': (6,19),
-                          'output_shape': (5,19),
-                          'out_features': 19,
-                          'kernel_size_list': [2,3],
-                          'dilation_rate_list': [1,1]}
-        if config is None:
-            config = default_config
-        else:
-            config = {**default_config, **config}  # 合并配置
 
-        input_shape = config['input_shape']
-        output_shape = config['output_shape']
-        out_features = config['out_features']
-        kernel_size_list = config['kernel_size_list']
-        dilation_rate_list = config['dilation_rate_list']
+        model_config = self._validata_config(config, self.ParallelConfig)
 
+        input_shape = model_config.input_shape
+        branch_filters =model_config.branch_filters
+        branch_kernels = model_config.branch_kernels
+        branch_dilation_rate = model_config.branch_dilation_rate
+        out_features = model_config.out_features
 
-        inputs = tf.keras.Input(shape=input_shape)
-
+        #  多分支设计可能捕捉更丰富的特征，比如短、中、长期；
+        self.inputs = tf.keras.Input(shape=input_shape)
+        inputs=self.inputs.copy()
+        # branch_filters: List[List[PositiveInt]] = Field(default=[[32, 32], [64, 64]],
+        # branch_kernels: List[List[PositiveInt]] = Field(default=[[2, 3], [2, 3]],
         # 多分支特征提取
-        branch_outputs = []
-        for i, (k, d) in enumerate(zip(kernel_size_list, dilation_rate_list)):
-            branch = tf.keras.layers.Conv1D(64, kernel_size=k, activation='relu', padding='same', dilation_rate=d)(
-                inputs)
-            print(f"已添加第{i}个分支里第一个卷积层:滤波器64个，Kernel_size={k},Activation='relu',dilation_rate={d}")
-            # 目前只用1层卷积层
-            # branch = tf.keras.layers.Conv1D(128,kernel_size=k,activation='relu',padding='same',dilation_rate=d)(branch)
-            # print(f"已添加第{i}个分支里第2个卷积层:滤波器128个，Kernel_size={k},Activation='relu',dilation_rate={d}")
-            branch_outputs.append(branch)
+        for layer_index, (f_ls,k_ls, d_ls) in enumerate(zip(branch_filters,branch_kernels, branch_dilation_rate)):
+            print(f"已添加第{layer_index}层")
 
-        # 合并分支
-        merged = tf.keras.layers.concatenate(branch_outputs, axis=-1)  # 时间维度,不使用池化，不能将整个压成1个单一表示，dense也不好)
+            branch_outputs = []
+            for branch_index,(num_filters,num_kernels,num_dilation) in enumerate(zip(f_ls,k_ls,d_ls)):
+                branch = tf.keras.layers.Conv1D(filters=num_filters, kernel_size=num_kernels, padding='same', dilation_rate=num_dilation)(inputs)
+                print(f"第{branch_index}个分支:滤波器{num_filters}个，Kernel_size={num_kernels},Activation='relu',dilation_rate={num_dilation}")
+                branch = tf.keras.layers.BatchNormalization()(branch)
+                branch = tf.keras.layers.Activation('relu')(branch)
 
-        # 融合不同分支的特征
-        x = tf.keras.layers.Conv1D(128, kernel_size=3, activation='relu', padding='same', dilation_rate=1)(merged)
-        x = tf.keras.layers.Conv1D(64, kernel_size=3, activation='relu', padding='same', dilation_rate=1)(x)
+                branch_outputs.append(branch)
+
+            # 层'间'的分支合并（融合同层不同分支的特征）
+            merged = tf.keras.layers.concatenate(branch_outputs, axis=-1) # 拼接
+            fused = tf.keras.layers.Conv1D(filters = sum(f_ls) // 2, kernel_size=1,padding='same', dilation_rate=1)(merged) # 合并后的大小还是32个特征?
+            fused = tf.keras.layers.BatchNormalization()(fused)
+            fused = tf.keras.layers.Activation('relu')(fused) # 要在上一步之后才能relu吗？
+
+            inputs = fused # 进下一层前的数据
+            self.outputs = fused # 也是本层输出
+
+
+        # x = tf.keras.layers.Conv1D(128, kernel_size=3, activation='relu', padding='same', dilation_rate=1)(layer_outputs)
+        # x = tf.keras.layers.Conv1D(64, kernel_size=3, activation='relu', padding='same', dilation_rate=1)(x)
 
         # 对于时间序列预测，通常会在卷积层后直接使用卷积层或转置卷积层来调整输出形状，而不是全连接层 'linear'
-        outputs = tf.keras.layers.Conv1D(filters=out_features, kernel_size=1, activation=None,
-                                         name='regression_output')(x)
+        # outputs = tf.keras.layers.Conv1D(filters=out_features, kernel_size=1, activation=None,
+        #                                  name='regression_output')(x)
 
         # 创建模型
-        model = tf.keras.Model(inputs=inputs, outputs=outputs)
+        model = tf.keras.Model(inputs=self.inputs, outputs=self.outputs)
 
         # 编译模型
         model.compile(
@@ -211,20 +225,12 @@ class CnnModel:
                                   config=None
                                   ) -> tf.keras.Model:
         """ 时间步级别的混合输出：每个时间步都预测数值和分类"""
-        default_config = {'input_shape': (6, 19),
-                          'regression_features':1,
-                          'num_classes': 3,  # 分类类别数 3分类
-                          'output_timesteps': 5,} # 预测的时间步数
+        model_config = self._validata_config(config, self.MixedConfig)
 
-        if config is None:
-            config = default_config
-        else:
-            config = {**default_config, **config}  # 合并配置
-
-        input_shape = config['input_shape']
-        regression_features = config['regression_features']
-        num_classes = config['num_classes']
-        output_timesteps = config['output_timesteps']
+        input_shape = model_config.input_shape
+        regression_features = model_config.regression_features
+        num_classes = model_config.num_classes
+        output_timesteps = model_config.output_timesteps
 
         inputs = tf.keras.Input(shape=input_shape)
 
