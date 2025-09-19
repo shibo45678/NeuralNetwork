@@ -7,7 +7,7 @@ from src.utils.windows import WindowGenerator
 from src.models import CnnModel
 from src.models import LstmModel
 from src.training import TrainingCnn
-from src.evaluation import EvaluateModel
+from src.evaluation import evaluate_model
 import pandas as pd
 import time
 
@@ -118,61 +118,71 @@ def main():
         print(f'Inputs shape (batch,time,features):{train_inputs.shape}')
         print(f'Labels shape (bathc,time,features):{train_labels.shape}')
 
+    """=========================================CNN========================================="""
     """构建并编译CNN模型"""
     # 基于历史6个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点 'T''p'列
     timeseries_cnn_model = CnnModel(architecture_type='parallel') # 分支并行模式
     timeseries_cnn_model._build_parallel_model(input_shape=train_inputs.shape,
                                                output_shape=train_labels.shape,
-                                               num_features=train_labels.shape[-1],
-                                               branch_kernels=[2,3], # 2个分支
-                                               dilation_rate_list=[1,1]) # 2个分支都取默认1
+                                               branch_filters =[[32,32],[64,64]],
+                                               branch_kernels=[[2,3],[2,3]], # 2个分支
+                                               branch_dilation_rate=[[1,1],[1,1]], # 2个分支都取默认1
+                                               activation='relu') # swish
     """训练CNN模型"""
-    history,best_model = TrainingCnn(name='Conv',model=timeseries_cnn_model,window=single_window)
+    history_cnn,best_model_cnn = TrainingCnn(model=timeseries_cnn_model,window=single_window)
     timeseries_cnn_model.summary()  # 出来一个表 显示每一层参数个数
 
     """评估CNN模型"""
-    EvaluateModel(name='conv',model=best_model,window=single_window)
+    val_mae_cnn,test_mae_cnn=evaluate_model(name='conv',model=best_model_cnn,window=single_window)
+    print(f"评估模型 best_model_cnn 的验证集和测试集的均方绝对值误差MAE结果如下：")
+    print(val_mae_cnn,test_mae_cnn)
 
+    """=========================================LSTM========================================="""
     """构建并编译LSTM模型1"""
     timeseries_lstm1_model=LstmModel()
-    output =train_labels.shape._build_sequential_model(
-                                        filters=[64,],return_sequences=False,
-                                        dense_units=train_labels.shape[0]*train_labels.shape[1],
-                                        output=train_labels.shape )
-
+    timeseries_lstm1_model._build_sequential_model(
+                                        units=[64,],
+                                        return_sequences=[False,], # 只输出最后一行
+                                        output_shape=train_labels.shape )
     """训练LSTM模型1"""
-    history=
+    history_lstm1,best_model_lstm1= TrainingLstm(model=timeseries_lstm1_model,window=single_window,
+                                           file_path='best_model_lstm1.h5')
+    timeseries_lstm1_model.summary() # 参数个数
     """评估LSTM模型1"""
-    EvaluateModel(name='lstm',model=best_model,window=single_window)
+    val_mae_lstm1,test_mae_lstm1=evaluate_model(name ='lstm1',model=best_model_lstm1,window=single_window)
+    print(f"评估模型 best_model_lstm1 的验证集和测试集的均方绝对值误差MAE结果如下：")
+    print(val_mae_lstm1,test_mae_lstm1)
 
-   """LSTM模型2"""
+    """LSTM模型2"""
+    timeseries_lstm2_model = LstmModel()
+    timeseries_lstm2_model._build_sequential_model(
+        units=[64,64], # 2层LSTM
+        return_sequences=[True,False],  # 只输出最后一行
+        output_shape=train_labels.shape)
+    """训练LSTM模型2"""
+    history_lstm2, best_model_lstm2 = TrainingLstm(model=timeseries_lstm2_model, window=single_window,
+                                                   file_path='best_model_lstm2.h5')
+    timeseries_lstm2_model.summary()  # 参数个数
+    """评估LSTM模型2"""
+    val_mae_lstm2,test_mae_lstm2=evaluate_model(name='lstm2',model=best_model_lstm2, window=single_window, )
+    print(f"评估模型 best_model_lstm2 的验证集和测试集的均方绝对值误差MAE结果如下：")
+    print(val_mae_lstm2,test_mae_lstm2)
 
 
+    """=========================================比较CNN和LSTM的预测效果========================================="""
+    # 画出每个模型里面测试集和验证集的MAE
+    val_mae =[val_mae_cnn,val_mae_lstm1,val_mae_lstm2]
+    test_mae = [test_mae_cnn,test_mae_lstm1,test_mae_lstm2]
+    x = len(val_mae) # 3个模型
 
-
-    """比较CNN和LSTM的预测效果"""
-    print(multi_val_performance) # 展示验证集的评估效果（conv/LSTM1/LSTM2)
-    print(multi_test_performance) # 展示测试集的评估效果
-    # 找出测试值MAE所属的索引
-    metric_index = multi_lstm_model.metrics_names.index('mean_absolute_error')
-    print(metric_index)
-    multi_val_performance.values()
-    # 根据MAE的索引遍历验证集的评估结果，返回所有模型的MAE测量值 *
-    val_mae=[v[metric_index] for v in multi_val_performance.values()]
-    print(val_mae)
-    test_mae = [v[metric_index] for v in multi_test_performance.values()]
-    print(test_mae)
-
-    x = np.arange(len(multi_test_performance))  # 3个模型
     plt.ylabel('mean_absolute_error')  # 指定纵轴标签
-    # 画两条竖状条形，x指定柱体在X轴上的坐标位置，height指定柱体的高度（相当y)，width指定柱体宽度 与bar和barh的width和height的区别
-    plt.bar(x=x-0.17, height=val_mae, width=0.3, label='Validation')   # bar 柱状图
+    plt.bar(x=x-0.17, height=val_mae, width=0.3, label='Validation')
     plt.bar(x=x+0.17, height=test_mae, width=0.3, label='Test')
-    plt.xticks(ticks=x, labels=multi_test_performance.keys(),rotation=45)  # 指定X轴的刻度 用performance的key对应横坐标3个标签
+    plt.xticks(ticks=x, labels=['conv1D','lstm1','lstm2'],rotation=45)
     _ = plt.legend()
 
 
 
 
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()

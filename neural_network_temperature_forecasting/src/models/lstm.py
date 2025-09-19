@@ -7,26 +7,16 @@ from typing import List,Optional,Dict
 class LstmModel:
 
     class SequentislConfig(BaseModel):
-        filters:List[PositiveInt] = Field(default=[64,],description="滤波器数量，len控制lstm的层数")
-        return_sequences:bool = Field(default=False,description="是否只在最后一个时间步产生输出")
-        dense_units: List[PositiveInt] = Field(default=[5 * 19],description="全连接层单元数。值根据输出label形状定，如果只预测5行2列特征5*2；len控制全连接层层数。")
+        units:List[PositiveInt] = Field(default=[64,],description="滤波器数量，len控制lstm的层数")
+        return_sequences:List[bool] = Field(default=[False,],description="是否只在最后一个时间步产生输出，对应LSTM层数")
         output_shape: List[PositiveInt,PositiveInt]=Field(default =[5,19],description="调整reshape输出形状")
-    @validator('output_shape')
-    def validate_output_shape_consistency(cls,v,values):
-        if 'dense_units' in values and v[1]*v[0] !=values['dense_units']:
-            raise ValueError(
-                f"输出的形状长{v[0]} 和宽{v[1]}相乘的结果，必须与{values['dense_units']} 保持一致"
-            )
-        return v
+
 
     def _validate_config(self,config:Optional[Dict],config_class:type)-> BaseModel:
         try:
             return config_class(**(config) or {})
         except Exception as e:
             raise ValueError(f"配置验证失败：{str(e)}")
-
-    def __init__(self):
-        pass
 
     def _build_sequential_model(self,
                                 config: dict = None
@@ -35,23 +25,26 @@ class LstmModel:
         """参数检查"""
         model_config = self._validata_config(config, self.SequentialConfig)
 
-        filters = model_config.filters
+        units = model_config.units
         return_sequences = model_config.return_sequences
-        dense_units = model_config.dense_units
         output_shape =model_config.output_shape
 
         model = tf.keras.Sequential()
 
         # 添加LSTM层
-        for i ,(f,s) in enumerate(filters,return_sequences):
-            model.add(tf.keras.layers.LSTM(filters=f,activation='tanh',return_sequences=s) # 确认return
-                      )
-            # shape[32,6,19]==>[32,64]
-            # tanh 将一个实数映射到（-1 1）的区间
-            print(f"添加LSTM层lstm_{i + 1}:Filter={f},Activation='tanh',Return_sequences={s}")
+        for i ,(u,s) in enumerate(zip(units,return_sequences)):
+            model.add(tf.keras.layers.LSTM(units=u,activation='tanh',return_sequences=s))# shape[32,6,19]==>[32,64] tanh 将一个实数映射到（-1 1）的区间
+            """
+            1.设置只在最后一个时间步产生输出:return_sequences=false
+            2.LSTM 层的参数总数【（64+19+1）*64】*4 == 【（上一轮输出+本轮输入）*（全联接输出）+（输出层偏置）】*4层（遗忘门*1+记忆门*2+输出门*1）
+             -a. 如果LSTM是第1层，那么输入就是(64+inputs.shape[1])个特征值。
+             -b. 如果是后续层，接在另一个LSTM层之后(且前一层的return_sequences=True),那么输入维度将是前一层的输出维度 64,总输入=64+64=128
+            """
 
-        # 添加全连接层
-        model.add(tf.keras.layers.Dense(units=dense_units,kernel_initializer=tf.initializers.zeros)) # dense  shape[32,5*19]
+            print(f"添加LSTM层lstm_{i + 1}:Units={u},Activation='tanh',Return_sequences={s}")
+
+        # 添加全连接层 (64+1)*95
+        model.add(tf.keras.layers.Dense(units= output_shape[0]* output_shape[1],kernel_initializer=tf.initializers.zeros)) # dense  shape[32,95]
         print(f"添加Dense层:Units={dense_units},设置全零初始化kernel_initializer")
 
         # 输出层,调整形状
