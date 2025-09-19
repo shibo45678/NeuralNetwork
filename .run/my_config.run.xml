@@ -1,11 +1,8 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="my_configuration" type="PythonConfigurationType" factoryName="Python" singleton="false">
+  <configuration default="false" name="my_config" type="PythonConfigurationType" factoryName="Python" singleton="true">
     <module name="pythonProject1" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
-    <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
-    </envs>
     <option name="SDK_HOME" value="" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/neural_network_temperature_forecasting" />
     <option name="IS_MODULE_SDK" value="true" />

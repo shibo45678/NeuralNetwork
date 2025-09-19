@@ -102,7 +102,7 @@ def main():
 
     # 未指定预测特征列，预测所有列
     multi_window = WindowGenerator(input_width=6, label_width=5, shift=24,
-                                   train_df=df_train, val_df=df_val, test_df=df_test)
+                                train_df=df_train, val_df=df_val, test_df=df_test)
     print(multi_window)
 
     # 2 构建训练集、验证集和测试集

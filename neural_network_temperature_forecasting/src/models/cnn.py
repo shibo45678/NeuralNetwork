@@ -60,7 +60,7 @@ class CnnModel:
                                                         description="每个子列表代表一个层级，子列表中的数字代表该层各个分支的kernel_size。控制短期特征、中期特征、长期特征")
         branch_dilation_rate: List[List[PositiveInt]] = Field(default=[[1, 1], [1, 1]],
                                                               description="膨胀卷积，不增加参数的情况下扩大感受野，善于处理更长期的时间依赖。1是1D的默认值,(kernel_size-1)*dilation_rate+1=3, 1是默认值，长序列可调整")
-        activation:List[str] =Feild(default=['relu','swish'])
+        activation:List[str] =Field(default=['relu','swish'])
 
     @validator('input_shape', 'output_shape')
     def validate_shape_length(cls, v):
