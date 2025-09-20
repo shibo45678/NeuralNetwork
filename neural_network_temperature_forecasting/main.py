@@ -6,10 +6,11 @@ from src.data.exploration import Visualization
 from src.utils.windows import WindowGenerator
 from src.models import CnnModel
 from src.models import LstmModel
-from src.training import TrainingCnn
+from src.training import TrainingCnn,TrainingLstm
 from src.evaluation import evaluate_model
 import pandas as pd
 import time
+import matplotlib.pyplot as plt
 
 
 def main():

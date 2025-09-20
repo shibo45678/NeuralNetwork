@@ -1,1 +1,1 @@
-from .metrics import EvaluateModel
+from .metrics import evaluate_model

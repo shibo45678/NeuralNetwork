@@ -4,8 +4,8 @@ import tensorflow as tf
 MAX_EPOCHS=20 # 训练总轮数
 def TrainingCnn(model:tf.keras.models,
                 window:'WindowGenerator',
-                epochs:PositiveInt=MAX_EPOCHS,
-                verbose:PositiveInt=2,
+                epochs:int=MAX_EPOCHS,
+                verbose:int=2,
                 file_path:str='best_model_cnn.h5'):
 
         history = model.fit(
@@ -50,8 +50,8 @@ def TrainingCnn(model:tf.keras.models,
 
 def TrainingLstm(model:tf.keras.models,
                  window:'WindowGenerator',
-                 epochs:PositiveInt=100,
-                 verbose:PositiveInt=2,
+                 epochs:int=100,
+                 verbose:int=2,
                  file_path:str ='best_model_lstm.h5'):
 
     history = model.fit(window.createTrainSet, # 或者直接写window 训练数据也可以不写

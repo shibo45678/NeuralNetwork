@@ -1,12 +1,12 @@
 from ..utils import WindowGenerator
 from ..models import CnnModel,LstmModel
 import matplotlib.pyplot as plt
-
+from typing import Union
 
 
 def evaluate_model(name:str,
                    model:Union['CnnModel','LstmModel'],
-                  window:'WindowGenerator'):
+                   window:'WindowGenerator'):
 
     window.window_plot(model)
     plt.show()
@@ -14,7 +14,7 @@ def evaluate_model(name:str,
     """MAE"""
     # 用验证集、测试集评估模型，并返回验证集评估结果（损失值和MAE）evaluate
     val_performance = model.evaluate(window.createValSet,verbose=0)
-    test_performance= model.evaluate(window.createTestSet, verbose=0)
+    test_performance = model.evaluate(window.createTestSet, verbose=0)
 
     # 找出测试值MAE所属的索引(指标为损失值-均方误差和MAE)
     metric_index = model.metrics_names.index('mean_absolute_error')
