@@ -1,5 +1,8 @@
 from pydantic import BaseModel, Field, field_validator, PositiveInt
 from typing import List, Optional, Dict, Tuple
+import os
+# 在模型文件的开头设置
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 最严格的设置
 import tensorflow as tf
 
 
@@ -175,6 +178,7 @@ class CnnModel:
         #  多分支设计可能捕捉更丰富的特征，比如短、中、长期；
 
         inputs = tf.keras.Input(shape=input_shape)
+        print(f"input_shape:{input_shape}")
         x = inputs
 
         # 多分支特征提取
@@ -186,7 +190,7 @@ class CnnModel:
                 branch = tf.keras.layers.Conv1D(filters=num_filters, kernel_size=num_kernels, padding='same',
                                                 dilation_rate=num_dilation)(x)
                 branch = tf.keras.layers.BatchNormalization()(branch)
-                branch = tf.keras.layers.Activation(activation)(branch) # relu
+                branch = tf.keras.layers.Activation(activation)(branch)
                 print(
                     f"第{branch_index}个分支:滤波器{num_filters}个，Kernel_size={num_kernels},Activation={activation},dilation_rate={num_dilation}")
                 branch_outputs.append(branch)
@@ -214,9 +218,9 @@ class CnnModel:
         # 添加普通卷积层进一步融合特征
         x = tf.keras.layers.Conv1D(filters=64, kernel_size=3, activation=activation, padding='same', dilation_rate=1)(x)
 
-        # 使用注意力机制对时间步加权（batch_size,timesteps,1)
-        attention = tf.keras.layers.Conv1D(filters=1, kernel_size=1, activation='softmax', padding='same')(
-            x)  # softmax 保证加权1
+        # 使用注意力机制对时间步加权
+        attention = tf.keras.layers.Conv1D(filters=1, kernel_size=1, activation='sigmoid', padding='same')(
+            x)  # filter=1 所有特征共享权;每个特征独立权重 filter跟输出定；softmax(axis=-1)特征权重和为1	强调特征间相对重要性（竞争性）
         weighted = tf.keras.layers.multiply([x, attention])  # (batch_size,timesteps,64)
 
         # 保留时间维度的注意力机制。不用平均时间步 outputs = tf.keras.layers.Lambda(lambda x: tf.reduce_sum(x, axis=1))(weighted)  # 形状: (batch_size, 64)
@@ -230,7 +234,7 @@ class CnnModel:
         outputs = tf.keras.layers.Conv1D(filters=output_shape[1], kernel_size=1, padding='same')(x)
 
         # 创建模型
-        model = tf.keras.Model(inputs=self.inputs, outputs=outputs)
+        model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
         # 编译模型
         model.compile(
@@ -275,7 +279,7 @@ class CnnModel:
         regression_output = regression_output[:, :output_timesteps, :]
         classification_output = classification_output[:, :output_timesteps, :]
 
-        model = tf.keras.Model(inputs=self.inputs, outputs=[regression_output, classification_output])
+        model = tf.keras.Model(inputs=inputs, outputs=[regression_output, classification_output])
 
         # 编译模型
         model.compile(

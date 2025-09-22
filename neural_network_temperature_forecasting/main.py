@@ -8,13 +8,13 @@ from src.models import CnnModel
 from src.models import LstmModel
 from src.training import TrainingCnn, TrainingLstm
 from src.evaluation import evaluate_model
-import pandas as pd
+from src.utils.config import TensorFlowConfig
 import time
 import matplotlib.pyplot as plt
 
-
 def main():
-    """"""
+    TensorFlowConfig.setup_environment()
+
     """编码utf-8"""
     file_names = ["data_climate.csv"]
     encoder = EncodingHander(file_names)
@@ -131,9 +131,10 @@ def main():
         'branch_kernels': [[2, 3], [2, 3]],
         'branch_dilation_rate': [[1, 1], [1, 1]],
         'activation': 'relu'} # 或者'swish'
-    timeseries_cnn_model._build_parallel_model(config_cnn_parallel_model)  # swish
+    cnn_model=timeseries_cnn_model._build_parallel_model(config_cnn_parallel_model)  # 返回普通的model,需要变量接收
+
     """训练CNN模型"""
-    history_cnn, best_model_cnn = TrainingCnn(model=timeseries_cnn_model, window=single_window)
+    history_cnn, best_model_cnn = TrainingCnn(model=cnn_model, window=single_window)
     timeseries_cnn_model.summary()  # 出来一个表 显示每一层参数个数
 
     """评估CNN模型"""
@@ -149,9 +150,9 @@ def main():
         'return_sequences': [False, ],  # 只输出最后一行
         'output_shape': train_labels.shape[1:]}
 
-    timeseries_lstm1_model._build_sequential_model(config_lstm1)
+    lstm1_model=timeseries_lstm1_model._build_sequential_model(config_lstm1)
     """训练LSTM模型1"""
-    history_lstm1, best_model_lstm1 = TrainingLstm(model=timeseries_lstm1_model, window=single_window,
+    history_lstm1, best_model_lstm1 = TrainingLstm(model=lstm1_model, window=single_window,
                                                    file_path='best_model_lstm1.h5')
     timeseries_lstm1_model.summary()  # 参数个数
     """评估LSTM模型1"""
@@ -165,9 +166,9 @@ def main():
         'units': [64, 64],  # 2层LSTM
         'return_sequences': [True, False],  # 只输出最后一行
         'output_shape': train_labels.shape[1:]}
-    timeseries_lstm2_model._build_sequential_model(config_lstm2)
+    lstm2_model=timeseries_lstm2_model._build_sequential_model(config_lstm2)
     """训练LSTM模型2"""
-    history_lstm2, best_model_lstm2 = TrainingLstm(model=timeseries_lstm2_model, window=single_window,
+    history_lstm2, best_model_lstm2 = TrainingLstm(model=lstm2_model, window=single_window,
                                                    file_path='best_model_lstm2.h5')
     timeseries_lstm2_model.summary()  # 参数个数
     """评估LSTM模型2"""
