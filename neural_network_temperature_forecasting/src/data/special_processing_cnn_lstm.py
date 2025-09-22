@@ -6,10 +6,9 @@ import numpy as np
 import datetime
 
 
-class SpecialCnnLstm(DataPreprocessor):
+class SpecialCnnLstm():
     def __init__(self, df: pd.DataFrame):
-
-        super().__init__(df)
+       self.df =df
 
     def prepare_for_cnn_lstm(self) ->'SpecialCnnLstm' :
         """1.处理'Data Time' 时间列

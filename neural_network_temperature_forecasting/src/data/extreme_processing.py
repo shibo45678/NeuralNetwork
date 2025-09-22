@@ -73,6 +73,8 @@ class ExtremeDataHandler(DataPreprocessor):  # 继承
     def get_handled_data(self)->pd.DataFrame:
         return self.df
     def analyze_extreme_patterns(self):
+        """物理异常（错误数据）：物理可能性、时间持续性、空间一致性、设备状态、历史记录"""
+
         pass
 
     def assess_extreme_risks(self):

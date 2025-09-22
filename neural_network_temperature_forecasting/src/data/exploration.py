@@ -43,7 +43,7 @@ class Visualization:
 
     def violin_plot(self,df:pd.DataFrame,
                     var_name: str , value_name: str,
-                    title:str):
+                    title:str): # fences 是用来识别异常值（outliers） 的边界
 
         fig = go.Figure()
         for column in df[var_name].unique():
@@ -51,8 +51,27 @@ class Visualization:
                 x=df[df[var_name] == column][var_name],
                 y=df[df[var_name] == column][value_name],
                 name=column,
-                box_visible={'visible':True,'color':'blue'}, # show/hide the box
-                meanline_visible={'visible':True,'color':'red'} # show/hide the mean line.
+
+                # 均线设置（必须用字典）
+                meanline={
+                    'visible': True,  # 显示均线
+                    'color': 'red',  # 均线颜色
+                    'width': 2  # 均线宽度
+                },
+                # 箱线图设置（也必须用字典）
+                box={
+                    'visible': True,  # 显示箱线图
+                    'fillcolor': 'blue',  # 箱线图颜色
+                    'width': 0.2  # 箱线图宽度
+                },
+
+                # points='all', #  显示数据点：'all', 'outliers', 'suspectedoutliers', False
+                # pointpos=-1.5,  # 数据点位置
+                # jitter=0.1,  # 数据点抖动
+                # bandwidth=0.5,  # 核密度估计带宽
+                # side='both',  # 'both', 'positive', 'negative'
+                #
+                # showlegend=True
             ))
 
         # 添加图表布局和标题
@@ -69,12 +88,7 @@ class Visualization:
 
 
 
-# if __name__ == "__main__":
-#     # 创建示例数据
-#     data_dict = {
-#         'Column': ['a', 'a', 'a', 'a', 'b', 'b', 'b', 'b', 'T', 'T', 'T', 'T'],
-#         'Standardized': [1.4, 1.2, 3.2, 2.6, 3.3, 2.2, 3.3, 2.2, 0.1, 0.2, 0.3, 1.4]}
-#     df = pd.DataFrame(data_dict)
+
 
 
 
