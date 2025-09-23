@@ -1,0 +1,307 @@
+import os
+from datetime import datetime
+import pickle
+import inspect
+import hashlib
+import warnings
+import glob
+
+
+class DebugController:
+    """专门用于调试的检查点系统，- 修复序列化"""
+
+    def __init__(self, debug_dir='debug_sessions'):
+        self.debug_dir = debug_dir
+        os.makedirs(debug_dir, exist_ok=True)
+        self.stage_order: list[str] = ['after_data_preparation',
+                                       'after_model_build_cnn', 'after_training_cnn',
+                                       'after_model_lstm1', 'after_model_lstm2',
+                                       'after_models_compare']
+
+    def get_session_info(self):
+        """获取会话信息"""
+        info = []
+        for stage in self.stage_order:
+            stage_file = os.path.join(self.debug_dir, f'session_{stage}.pkl')
+            stage_hash_file = os.path.join(self.debug_dir, f'hash_{stage}.txt')
+
+            if os.path.exists(stage_file) and os.path.exists(stage_hash_file):
+                status = "有效"
+            else:
+                status = "缺失"
+            info.append(f"{stage}:{status}")
+
+        return '\n'.join(info) if info else "无保存的会话"
+
+    def continue_from_breakpoint(self, breakpoint_name, current_locals, target_file=None):
+        """""""""依赖链式检查"""
+
+        try:
+            if not self._is_stage_valid(breakpoint_name, target_file):
+                print(f"阶段 {breakpoint_name} 无效或已修改，需要重新运行当前及后续阶段")
+                self._clear_stages_from(breakpoint_name)  # 需要清除当前和后续阶段
+                return False
+
+        except ValueError:
+            print(f"未知阶段：{breakpoint_name}")
+            # 未知阶段，保守处理
+            self.clear_sessions()
+            return False
+
+        return self._load_stage(breakpoint_name, current_locals,target_file)
+
+    def _is_stage_valid(self, stage_name=None, target_file=None):
+        stage_file = os.path.join(self.debug_dir, f'session_{stage_name}.pkl')
+        stage_hash_file = os.path.join(self.debug_dir, f'hash_{stage_name}.txt')
+
+        # 检查文件是否存在
+        if not os.path.exists(stage_file):
+            print(f"阶段 {stage_name} 会话文件缺失,需要重新执行")
+            return False
+        if not os.path.exists(stage_hash_file):
+            print(f"阶段 {stage_name} 哈希文件缺失,需要重新执行")
+            return False
+
+        # 检查代码是否修改
+        current_hash = self.get_code_hash(stage_name, target_file)
+        try:
+            with open(stage_hash_file, 'r') as f:
+                saved_hash = f.read().strip()
+
+            if current_hash != saved_hash:
+                print(f"阶段 {stage_name}:代码已修改（{saved_hash[:8]} ->{current_hash[:8]}）")
+                return False
+            else:
+                print(f"阶段 {stage_name}：代码未修改，哈希值一致")
+                return True
+
+        except Exception as e:
+            print(f"阶段 {stage_name}: 哈希文件读取失败: {e}")
+            return False
+
+    def get_code_hash(self, stage_name=None, target_file=None):
+        """""""计算当前代码的哈希值，检测是否修改"""
+        if target_file is None:
+            frame = inspect.currentframe()
+            try:
+                caller_frame = frame.f_back.f_back  # 跳过自身和调用函数
+                target_file = inspect.getfile(caller_frame)
+            finally:
+                del frame  # 避免循环引用
+        try:
+            with open(target_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # 指定阶段名称，提取该阶段相关代码
+            if stage_name:
+                content = self._extract_stage_code_by_markers(lines, stage_name)
+            else:
+                content = ''.join(lines)  # 没有阶段，就整个main.py 文件
+
+            return hashlib.md5(content.encode()).hexdigest()
+
+        except FileNotFoundError:
+            warnings.warn(f"无法找到文件{target_file}")
+            return "unknown"
+
+    def _extract_stage_code_by_markers(self, lines, stage_name):
+        """通过注释标记提取特定阶段的代码"""
+        start_marker = f"# STAGE_START:{stage_name}"  # 在main.py内部添加注释
+        end_marker = f"# STAGE_END:{stage_name}"
+
+        stage_lines = []
+        in_stage = False
+        found_marker = False
+
+        for line in lines:
+            if start_marker in line:
+                in_stage = True
+                found_marker = True
+                continue  # 不包含标记行本身
+            elif end_marker in line:
+                break  # 遇到结束标记就停止
+            elif in_stage:
+                stage_lines.append(line)  # 在收集模式下in_stage=True：记录数据，保存代码
+
+        # 如果找到了标记，返回阶段代码；否则返回整个文件
+        return ''.join(stage_lines) if found_marker else ''.join(lines)  # 原表有换行会保留
+
+    def _load_stage(self, breakpoint_name, current_locals, target_file):
+        """加载特定阶段的状态"""
+
+        # 直接检查阶段是否有效而非加载
+        if self._is_stage_valid(breakpoint_name, target_file):
+            return self._load_specific_stage(breakpoint_name, current_locals, target_file)
+        else:
+            print(f"阶段 {breakpoint_name} 无效，查找可用阶段")
+            return self._find_available_stage(breakpoint_name, current_locals, target_file)
+
+    def _load_specific_stage(self, stage_name, current_locals, target_file):
+        """加载指定阶段的数据，主要判断代码是否被修改"""
+        try:
+            stage_file = os.path.join(self.debug_dir, f'session_{stage_name}.pkl')
+
+            # 1. 代码未修改，加载当前阶段数据
+            if self._is_stage_valid(stage_name, target_file):
+                with open(stage_file, 'rb') as f:
+                    session_data = pickle.load(f)
+                restored_locals = self.__restore_locals(session_data['locals'], current_locals)
+                current_locals.update(restored_locals)
+                print(f"{stage_name}阶段代码未修改，继续执行后续")
+                return True
+
+            # 2. 代码已经修改（需要清除当前及后续文件）
+            else:
+                print(f"{stage_name}阶段代码已修改，清除当前及后续文件")
+                self._clear_stages_from(stage_name)
+
+                # 根据阶段位置判断下一步
+                stage_index = self.stage_order.index(stage_name)
+                if stage_index > 0:
+                    # 只要不是第一阶段，尝试加载上一个阶段
+                    prev_stage = self.stage_order[stage_index - 1]
+                    print(f"尝试加载上一个有效阶段: {prev_stage}")
+
+                    return self._load_stage(prev_stage, current_locals, target_file)
+                else:
+                    # 第一个阶段被修改，需要完全重新开始
+                    self.clear_sessions()
+                    print("第一个阶段代码已修改，需要完全重新执行，已删除所有文件")
+                    return False
+
+        except Exception as e:
+            print(f"加载阶段 {stage_name} 失败：{str(e)}")
+            return False
+
+    def _find_available_stage(self, breakpoint_name, current_locals, target_file):
+        """查找可用的阶段数据"""
+        try:
+            current_index = self.stage_order.index(breakpoint_name)
+
+            # 从当前阶段的前一个开始往前找
+            for i in range(current_index - 1, -1, -1):
+                stage_name = self.stage_order[i]
+
+                # 检查阶段是否有效（文件存在且代码未修改）
+                if self._is_stage_valid(stage_name, target_file):
+                    print(f"找到可用阶段: {stage_name}")
+                    return self._load_specific_stage(stage_name, current_locals, target_file)
+
+            # 没有找到任何可用阶段
+            print("没有找到任何可用阶段，需要重新执行所有程序")
+            self.clear_sessions()
+            return False
+
+        except ValueError:
+            print(f"未知阶段: {breakpoint_name}")
+            return False
+
+    def clear_sessions(self):
+        """清除所有阶段文件会话"""
+        # 定义所有可能的阶段文件模式
+        file_patterns = ['session_*.pkl', 'hash_*.txt']
+
+        files_removed = 0
+        for pattern in file_patterns:
+            for file_path in glob.glob(os.path.join(self.debug_dir, pattern)):
+                try:
+                    os.remove(file_path)
+                    files_removed += 1
+                    print(f"已删除: {os.path.basename(file_path)}")
+                except Exception as e:
+                    print(f"删除文件失败 {file_path}: {e}")
+
+        print(f"已清除{files_removed}个调试会话文件")
+        return files_removed > 0
+
+    def _clear_stages_from(self, start_stage):
+        """从指定阶段开始清除所有后续阶段的文件（只清除文件，不涉及加载逻辑）"""
+        try:
+            start_index = self.stage_order.index(start_stage)
+            stages_to_clear = self.stage_order[start_index:]
+        except ValueError:
+            print(f"未知起始阶段: {start_stage}")
+            stages_to_clear = self.stage_order
+
+        files_removed = 0
+        for stage in stages_to_clear:
+            stage_file = os.path.join(self.debug_dir, f'session_{stage}.pkl')
+            stage_hash_file = os.path.join(self.debug_dir, f'hash_{stage}.txt')
+
+            for file_path in [stage_file, stage_hash_file]:  # 创建了一个包含这两个字符串stage_file，stage_hash_file的列表
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        files_removed += 1
+                        print(f"已删除: {os.path.basename(file_path)}")
+                    except Exception as e:
+                        print(f"删除文件失败 {file_path}: {str(e)}")
+
+        print(f"从阶段 {start_stage} 开始清除，共移除{files_removed}个文件")
+
+    def _sanitize_locals(self, locals_dict):
+        """清理locals，移除不可序列化的对象"""
+        sanitized = {}
+        skipped_vars = []
+
+        for key, value in locals_dict.items():
+            if key.startswith('_'):
+                continue
+            try:
+                pickle.dumps(value)
+                sanitized[key] = value
+            except (pickle.PickleError, TypeError, AttributeError) as e:
+                skipped_vars.append((key, type(value).__name__))
+                # 对于不可序列化的对象，保存其类型信息
+                sanitized[key] = {
+                    '__debug_placeholder__': True,
+                    'type': type(value).__name__,
+                    'repr': repr(value)[:200]
+                }
+
+        if skipped_vars:
+            print(f"跳过不可序列化的变量: {skipped_vars}")
+
+        return sanitized
+
+    def __restore_locals(self, saved_locals, current_locals):
+        restored = {}
+        for key, value in saved_locals.items():
+            if isinstance(value, dict) and value.get('__debug_placeholder__'):
+                print(f"变量 {key} 无法恢复，需要重新创建")
+                restored[key] = None
+            else:
+                restored[key] = value
+
+        return restored
+
+    def save_debug_session(self, locals_dict, breakpoint_name, target_file=None):
+        """""""""分阶段存储会话的所有变量，保存代码哈希"""
+        # 为每个阶段创建独立文件
+        stage_file = os.path.join(self.debug_dir, f'session_{breakpoint_name}.pkl')
+        stage_hash_file = os.path.join(self.debug_dir, f'hash_{breakpoint_name}.txt')
+
+        # 保存这个阶段的代码哈希
+        current_hash = self.get_code_hash(breakpoint_name, target_file)
+        with open(stage_hash_file, 'w') as f:
+            f.write(current_hash)
+        print(f"阶段 {breakpoint_name} 代码哈希已保存: {current_hash[:8]}...")
+
+        # 清理locals
+        sanitized_locals = self._sanitize_locals(locals_dict)
+
+        # 保存会话
+        session_data = {
+            'breakpoint': breakpoint_name,
+            'locals': sanitized_locals,
+            'timestamp': datetime.now().isoformat(),
+            'code_hash': current_hash
+        }
+        try:
+            with open(stage_file, 'wb') as f:
+                pickle.dump(session_data, f)
+            print(f"阶段会话及哈希码已保存：{breakpoint_name}")
+            return True
+        except Exception as e:
+            print(f"阶段会话及哈希码保存失败：{e}")
+            return False

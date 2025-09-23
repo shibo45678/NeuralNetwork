@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, PositiveInt
 from typing import List, Optional, Dict, Tuple
 import os
+
 # 在模型文件的开头设置
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 最严格的设置
 import tensorflow as tf
@@ -20,6 +21,7 @@ class CnnModel:
             2.时间步级别的混合输出类型(数值回归+分类问题）
                _build_mixed_output_model 分类是已经预处理过的分类特征（分类数量较少），没涉及多分类密集向量embedding情况。
     """
+
     def __init__(self,
                  architecture_type='parallel',  # 'sequential' / 'mixed'
                  **kwargs):
@@ -31,6 +33,7 @@ class CnnModel:
             self.model = self._build_mixed_output_model(**kwargs)
 
     """=====================参数验证====================="""
+
     # 配置类1：_build_sequential_model 参数配置
     class SequentialConfig(BaseModel):  # 简单cnn + 全连接 ，回归预测
         filters: List[PositiveInt] = Field(default=[64, ],
@@ -71,7 +74,7 @@ class CnnModel:
                                                         description="每个子列表代表一个层级，子列表中的数字代表该层各个分支的kernel_size。控制短期特征、中期特征、长期特征")
         branch_dilation_rate: List[List[PositiveInt]] = Field(default=[[1, 1], [1, 1]],
                                                               description="膨胀卷积，不增加参数的情况下扩大感受野，善于处理更长期的时间依赖。1是1D的默认值,(kernel_size-1)*dilation_rate+1=3, 1是默认值，长序列可调整")
-        activation: str= Field(default='relu')
+        activation: str = Field(default='relu')
 
     @field_validator('input_shape', 'output_shape')
     def validate_shape_length(cls, v):
@@ -107,8 +110,8 @@ class CnnModel:
         except Exception as e:
             raise ValueError(f"配置验证失败: {e}")
 
-
     """===================构建模型==================="""
+
     def _build_sequential_model(self,
                                 config: Optional[Dict] = None
                                 ) -> 'tf.keras.Sequential':
@@ -157,13 +160,13 @@ class CnnModel:
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, epsilon=1e-07),  # adam 随机梯度下降
             loss=tf.keras.losses.MeanSquaredError(),  # 损失函数 MSE
-            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')] # 平均绝对值误差 MAE
+            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')]  # 平均绝对值误差 MAE
         )
 
         return model
 
     def _build_parallel_model(self,
-                              config:dict=None
+                              config: dict = None
                               ) -> tf.keras.Model:
 
         model_config = self._validate_config(config, self.ParallelConfig)
@@ -240,7 +243,7 @@ class CnnModel:
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, epsilon=1e-07),
             loss=tf.keras.losses.MeanSquaredError(),  # 损失函数 MSE
-            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')] ) # 平均绝对值误差 MAE
+            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')])  # 平均绝对值误差 MAE
 
         return model
 
