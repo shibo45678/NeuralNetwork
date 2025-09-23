@@ -56,9 +56,9 @@ class LstmModel:
         self.model.compile(
             optimizer=tf.optimizers.Adam(lr=0.001, epsilon=1e-07),
             loss=tf.losses.MeanSquaredError(),
-            metrics=[tf.metrics.MeanAbsoluteError()])
+            metrics=[tf.metrics.MeanAbsoluteError(name='mean_absolute_error')])
 
-        return self.model
+        return self
 
     def summary(self):
         """委托给内部的 Keras 模型"""

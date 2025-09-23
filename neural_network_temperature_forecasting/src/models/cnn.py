@@ -157,7 +157,7 @@ class CnnModel:
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, epsilon=1e-07),  # adam 随机梯度下降
             loss=tf.keras.losses.MeanSquaredError(),  # 损失函数 MSE
-            metrics=[tf.keras.metrics.MeanAbsoluteError()] # 平均绝对值误差 MAE
+            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')] # 平均绝对值误差 MAE
         )
 
         return model
@@ -240,7 +240,7 @@ class CnnModel:
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, epsilon=1e-07),
             loss=tf.keras.losses.MeanSquaredError(),  # 损失函数 MSE
-            metrics=[tf.keras.metrics.MeanAbsoluteError()] ) # 平均绝对值误差 MAE
+            metrics=[tf.keras.metrics.MeanAbsoluteError(name='mean_absolute_error')] ) # 平均绝对值误差 MAE
 
         return model
 
