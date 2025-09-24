@@ -38,13 +38,16 @@ class DebugController:
 
         try:
             if not self._is_stage_valid(breakpoint_name, target_file):
-                print(f"阶段 {breakpoint_name} 无效或已修改，需要重新运行当前及后续阶段")
-                self._clear_stages_from(breakpoint_name)  # 需要清除当前和后续阶段
+
+
+                print(f"{breakpoint_name} 阶段无效，清除当前及后续阶段...")
+                self._clear_stages_from(breakpoint_name)
+                print(f"已完成")
                 return False
 
         except ValueError:
             print(f"未知阶段：{breakpoint_name}")
-            # 未知阶段，保守处理
+            print(f"清除所有阶段文件...")
             self.clear_sessions()
             return False
 
@@ -56,10 +59,10 @@ class DebugController:
 
         # 检查文件是否存在
         if not os.path.exists(stage_file):
-            print(f"阶段 {stage_name} 会话文件缺失,需要重新执行")
+            print(f"阶段 {stage_name} 会话文件缺失,需要重新运行当前及后续阶段")
             return False
         if not os.path.exists(stage_hash_file):
-            print(f"阶段 {stage_name} 哈希文件缺失,需要重新执行")
+            print(f"阶段 {stage_name} 哈希文件缺失,需要重新运行当前及后续阶段")
             return False
 
         # 检查代码是否修改
@@ -69,7 +72,7 @@ class DebugController:
                 saved_hash = f.read().strip()
 
             if current_hash != saved_hash:
-                print(f"阶段 {stage_name}:代码已修改（{saved_hash[:8]} ->{current_hash[:8]}）")
+                print(f"阶段 {stage_name}:代码已修改（{saved_hash[:8]} ->{current_hash[:8]}）需要重新运行当前及后续阶段")
                 return False
             else:
                 print(f"阶段 {stage_name}：代码未修改，哈希值一致")
@@ -109,6 +112,9 @@ class DebugController:
         start_marker = f"# STAGE_START:{stage_name}"  # 在main.py内部添加注释
         end_marker = f"# STAGE_END:{stage_name}"
 
+        print(f"开始标记: {start_marker}")
+        print(f"结束标记: {end_marker}")
+
         stage_lines = []
         in_stage = False
         found_marker = False
@@ -123,8 +129,11 @@ class DebugController:
             elif in_stage:
                 stage_lines.append(line)  # 在收集模式下in_stage=True：记录数据，保存代码
 
+        content = ''.join(stage_lines)
+        print(f"提取的代码长度: {len(content)} 字符")
+
         # 如果找到了标记，返回阶段代码；否则返回整个文件
-        return ''.join(stage_lines) if found_marker else ''.join(lines)  # 原表有换行会保留
+        return content if found_marker else ''.join(lines)  # 原表有换行会保留
 
     def _load_stage(self, breakpoint_name, current_locals, target_file):
         """加载特定阶段的状态"""
@@ -147,12 +156,12 @@ class DebugController:
                     session_data = pickle.load(f)
                 restored_locals = self.__restore_locals(session_data['locals'], current_locals)
                 current_locals.update(restored_locals)
-                print(f"{stage_name}阶段代码未修改，继续执行后续")
+                print(f"{stage_name} 阶段代码未修改，继续执行后续")
                 return True
 
             # 2. 代码已经修改（需要清除当前及后续文件）
             else:
-                print(f"{stage_name}阶段代码已修改，清除当前及后续文件")
+                print(f"{stage_name} 阶段代码已修改，清除当前及后续文件")
                 self._clear_stages_from(stage_name)
 
                 # 根据阶段位置判断下一步
@@ -161,7 +170,6 @@ class DebugController:
                     # 只要不是第一阶段，尝试加载上一个阶段
                     prev_stage = self.stage_order[stage_index - 1]
                     print(f"尝试加载上一个有效阶段: {prev_stage}")
-
                     return self._load_stage(prev_stage, current_locals, target_file)
                 else:
                     # 第一个阶段被修改，需要完全重新开始
@@ -184,12 +192,12 @@ class DebugController:
 
                 # 检查阶段是否有效（文件存在且代码未修改）
                 if self._is_stage_valid(stage_name, target_file):
-                    print(f"找到可用阶段: {stage_name}")
-                    return self._load_specific_stage(stage_name, current_locals, target_file)
+                    print(f"找到可用阶段: {stage_name},并加载...")
+                    return self._load_specific_stage(stage_name, current_locals, target_file)  # 找到、加载、退出
 
             # 没有找到任何可用阶段
-            print("没有找到任何可用阶段，需要重新执行所有程序")
             self.clear_sessions()
+            print("没有找到任何可用阶段，删除所有阶段文件，重新执行程序")
             return False
 
         except ValueError:
@@ -283,9 +291,14 @@ class DebugController:
 
         # 保存这个阶段的代码哈希
         current_hash = self.get_code_hash(breakpoint_name, target_file)
-        with open(stage_hash_file, 'w') as f:
-            f.write(current_hash)
-        print(f"阶段 {breakpoint_name} 代码哈希已保存: {current_hash[:8]}...")
+        try:
+            with open(stage_hash_file, 'w') as f:
+                f.write(current_hash)
+            print(f"阶段 {breakpoint_name} 哈希码已保存: {current_hash[:8]}...")
+
+        except Exception as e:
+            print(f"阶段 {breakpoint_name} 哈希码保存失败：{str(e)}")
+
 
         # 清理locals
         sanitized_locals = self._sanitize_locals(locals_dict)
@@ -295,13 +308,14 @@ class DebugController:
             'breakpoint': breakpoint_name,
             'locals': sanitized_locals,
             'timestamp': datetime.now().isoformat(),
-            'code_hash': current_hash
+            # 'code_hash': current_hash
         }
         try:
             with open(stage_file, 'wb') as f:
                 pickle.dump(session_data, f)
-            print(f"阶段会话及哈希码已保存：{breakpoint_name}")
+            print(f"阶段 {breakpoint_name} 会话已保存")
             return True
+
         except Exception as e:
-            print(f"阶段会话及哈希码保存失败：{e}")
+            print(f"阶段 {breakpoint_name} 会话保存失败：{e}")
             return False

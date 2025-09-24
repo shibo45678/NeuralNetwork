@@ -54,9 +54,9 @@ class LstmModel:
         # 模型编译
 
         self.model.compile(
-            optimizer=tf.optimizers.Adam(lr=0.001, epsilon=1e-07),
+            optimizer=tf.optimizers.Adam(learning_rate=0.001, epsilon=1e-07),
             loss=tf.losses.MeanSquaredError(),
-            metrics=[tf.metrics.MeanAbsoluteError(name='mean_absolute_error')])
+            metrics=[tf.metrics.MeanAbsoluteError()])
 
         return self
 

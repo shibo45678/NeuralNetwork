@@ -77,9 +77,6 @@ class WindowGenerator:
             inputs.set_shape([None, self.input_width, None])
             labels.set_shape([None, self.label_width, None])
 
-            print(f"调整后的 inputs 形状: {inputs.shape}")
-            print(f"调整后的 labels 形状: {labels.shape}")
-
             return inputs, labels
 
 

@@ -45,7 +45,7 @@ def main():
     else:
         print("=== 重新执行 data_preparation 阶段 ===")
         print("包括：清洗数据 + 划分数据集 + 构建窗口数据...")
-        # STAGE_START:{after_data_preparation}
+        # STAGE_START:after_data_preparation
 
         file_names = ["data_climate.csv"]
         encoder = EncodingHander(file_names)  # 编码utf-8
@@ -146,11 +146,13 @@ def main():
         # createTrainSet()返回的是tf.data.Dataset对象，不是普通的元组列表
         # 必须使用TensorFlow的迭代机制：iter(), take()正确解包inputs和labels ：for... .take(1) / example有iter
         train_inputs, train_labels = single_window.example
+        print(f"train_inputs 形状: {train_inputs.shape}")
+        print(f"train_labels 形状: {train_labels.shape}")
 
         # 画个训练集的图
         single_window.window_plot(plot_col='T')
 
-        # STAGE_END:{after_data_preparation}
+        # STAGE_END:after_data_preparation
         debug_ctrl.save_debug_session(locals(), 'after_data_preparation', __file__)
 
     """=========================================CNN========================================="""
@@ -159,7 +161,7 @@ def main():
     else:
         print("==== 重新执行 model_build_cnn 阶段 ====")
         print("包括：构建、编译...")
-        # STAGE_START:{after_model_build_cnn}
+        # STAGE_START:after_model_build_cnn
 
         # 基于历史6个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点 'T''p'列
         timeseries_cnn_model = CnnModel(architecture_type='parallel')  # 分支并行模式
@@ -172,7 +174,7 @@ def main():
             'activation': 'relu'}  # 或者'swish'
         cnn_model = timeseries_cnn_model._build_parallel_model(config_cnn_parallel_model)  # 返回普通的model,需要变量接收
 
-        # STAGE_END:{after_model_build_cnn}
+        # STAGE_END:after_model_build_cnn
         debug_ctrl.save_debug_session(locals(), 'after_model_build_cnn', __file__)
 
     if debug_ctrl.continue_from_breakpoint('after_training_cnn', locals(), __file__):
@@ -180,7 +182,7 @@ def main():
     else:
         print("====重新执行 training_cnn 阶段 ====")
         print("包括：CNN 模型的训练 + 评估")
-        # STAGE_START:{after_training_cnn}
+        # STAGE_START:after_training_cnn
 
         history_cnn, best_model_cnn = TrainingCnn(model=cnn_model, window=single_window,
                                                   file_path='best_model_cnn.keras')
@@ -190,7 +192,7 @@ def main():
         print(f"评估模型 best_model_cnn 的验证集和测试集的均方绝对值误差MAE结果如下：")
         print(val_mae_cnn, test_mae_cnn)
 
-        # STAGE_END:{after_training_cnn}
+        # STAGE_END:after_training_cnn
         debug_ctrl.save_debug_session(locals(), 'after_training_cnn', __file__)
 
     """=========================================LSTM1========================================="""
@@ -199,7 +201,7 @@ def main():
     else:
         print("==== 重新执行 model_lstm1 阶段 ====")
         print("包括：lstm1模型的构建、编译、训练、评估...")
-        # STAGE_START:{after_model_lstm1}
+        # STAGE_START:after_model_lstm1
 
         timeseries_lstm1_model = LstmModel()
         config_lstm1 = {
@@ -217,7 +219,7 @@ def main():
         print(f"评估模型 best_model_lstm1 的验证集和测试集的均方绝对值误差MAE结果如下：")
         print(val_mae_lstm1, test_mae_lstm1)
 
-        # STAGE_END:{after_model_lstm1}
+        # STAGE_END:after_model_lstm1
         debug_ctrl.save_debug_session(locals(), 'after_model_lstm1', __file__)
 
     """=========================================LSTM2========================================="""
@@ -226,7 +228,7 @@ def main():
     else:
         print("==== 重新执行 model_lstm2 阶段 ====")
         print("包括：lstm2模型的构建、编译、训练、评估")
-        # STAGE_START:{after_model_lstm2}
+        # STAGE_START:after_model_lstm2
 
         timeseries_lstm2_model = LstmModel()
         config_lstm2 = {
@@ -243,7 +245,7 @@ def main():
         print(f"评估模型 best_model_lstm2 的验证集和测试集的均方绝对值误差MAE结果如下：")
         print(val_mae_lstm2, test_mae_lstm2)
 
-        # STAGE_END:{after_model_lstm2}
+        # STAGE_END:after_model_lstm2
         debug_ctrl.save_debug_session(locals(), 'after_model_lstm2', __file__)
 
     """=========================================比较CNN和LSTM的预测效果========================================="""
@@ -252,7 +254,7 @@ def main():
     else:
         print("==== 重新执行models_compare ====")
         print("包括：cnn,lstm1,lstm2 模型的 MAE对比")
-        # STAGE_START:{after_models_compare}
+        # STAGE_START:after_models_compare
 
         # 画出每个模型里面测试集和验证集的MAE
         val_mae = [val_mae_cnn, val_mae_lstm1, val_mae_lstm2]
@@ -265,7 +267,7 @@ def main():
         plt.xticks(ticks=x, labels=['conv1D', 'lstm1', 'lstm2'], rotation=45)
         _ = plt.legend()
 
-        # STAGE_END:{after_models_compare}
+        # STAGE_END:after_models_compare
         debug_ctrl.save_debug_session(locals(), 'after_models_compare', __file__)
 
 
