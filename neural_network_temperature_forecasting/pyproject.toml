@@ -17,5 +17,5 @@ line_length = 120             # 可选：统一代码格式化配置
 [[tool.mypy.overrides]]  # 针对特定文件的规则
 module = "pandas.*"  # 对有存根的库（如 pandas）保持严格检查
 ignore_missing_imports = false
-module = "草稿.1" # 直接匹配文件，不带.py后缀
+module = "main" # 直接匹配文件，不带.py后缀
 disallow_untyped_defs = false

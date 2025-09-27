@@ -48,6 +48,7 @@ class CnnModel:
                                       description="激活函数。单层的激活函数。代码中[0]用于卷积层，[1]用于全连接层。")
         output_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(5, 19),
                                                               description="输出形状。例如 (5,2) 表示预测5个时间步。每个时间步一个值, 2代表输出2个变量")
+        input_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(6, 19), description="输入形状")
         learning_rate: float = Field(default=0.001, description="adam优化器学习率")
 
         @field_validator('padding')
@@ -125,7 +126,7 @@ class CnnModel:
         activation = model_config.activation
         output_shape = model_config.output_shape
         learning_rate = model_config.learning_rate
-
+        input_shape = model_config.input_shape
         model = tf.keras.Sequential()
 
         # 添加卷积层
@@ -162,6 +163,10 @@ class CnnModel:
             loss='mse',  # 损失函数 MSE
             metrics=['mae']  # 平均绝对值误差 MAE
         )
+
+        # 保存input_shape到模型属性中
+        model._input_shape = input_shape
+        model._output_shape = output_shape
 
         return model
 
@@ -239,6 +244,9 @@ class CnnModel:
         # 创建模型
         model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
+        model._input_shape=input_shape # 保存到模型属性中
+        model._output_shape=output_shape # 方便训练调用
+
         # 编译模型
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, epsilon=1e-07),
@@ -254,9 +262,11 @@ class CnnModel:
         model_config = self._validate_config(config, self.MixedConfig)
 
         input_shape = model_config.input_shape
+        output_shape= model_config.output_shape
+        output_timesteps = model_config.output_timesteps
         regression_features = model_config.regression_features
         num_classes = model_config.num_classes
-        output_timesteps = model_config.output_timesteps
+
 
         inputs = tf.keras.Input(shape=input_shape)
 
@@ -283,6 +293,9 @@ class CnnModel:
         classification_output = classification_output[:, :output_timesteps, :]
 
         model = tf.keras.Model(inputs=inputs, outputs=[regression_output, classification_output])
+
+        model._input_shape = input_shape  # 保存到模型属性中
+        model._output_shape = output_shape  # 方便训练调用
 
         # 编译模型
         model.compile(

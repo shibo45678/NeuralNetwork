@@ -12,9 +12,6 @@ class WindowGenerator:
     """数据窗口类与方法定义"""
 
     def __init__(self, input_width: int, label_width: int, shift: int,
-                 train_df: Union[np.ndarray, pd.DataFrame],  # 包括X+Y的df
-                 val_df: Union[np.ndarray, pd.DataFrame],
-                 test_df: Union[np.ndarray, pd.DataFrame],
                  label_columns: Optional[List[str]] = None):
         """
         shift: 从输入结束到标签开始之间的偏移（时间步数）Prediction starts shift hours after input
@@ -23,10 +20,6 @@ class WindowGenerator:
         self.input_width = input_width  # input:6行（与split_window 窗口的inputs，input含义不相同，inputs说到列时，是包括XY特征）
         self.label_width = label_width  # label:5行
         self.shift = shift
-
-        self.train_df = train_df
-        self.val_df = val_df
-        self.test_df = test_df
         self.label_columns = label_columns
 
         # 行
@@ -35,8 +28,6 @@ class WindowGenerator:
         self.input_indices = np.arange(self.total_window_size)[0:input_width]  # [0:6]只是切片，不能直接赋值给对象，要在array上操作
         self.label_indices = np.arange(self.total_window_size)[self.label_start:]  # [2:]
 
-        # 列
-        self.columns_indices = {name: i for i, name in enumerate(train_df.columns)}  # 包含X和Y的所有列
         # 绘图用途
         if label_columns is not None:
             self.label_columns_indices = {name: i for i, name in enumerate(label_columns)}
@@ -49,6 +40,61 @@ class WindowGenerator:
             f'Label column name(s):{self.label_columns}'])
 
     """切分窗口数据"""
+
+    @property
+    def createTrainSet(self, data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
+        return self.make_dataset(data)
+
+    @property
+    def createValSet(self,data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
+        return self.make_dataset(self.val_df)
+
+    @property
+    def createTestSet(self,data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
+        return self.make_dataset(self.test_df)
+
+
+    @property
+    def example(self) -> Any:
+        """缓存模式，避免每次调用都从数据集中获取样本，每次相同用例
+        """
+        result = getattr(self, '_example', None)  # 尝试获取 _example 属性
+        if result is None:
+            result = next(iter(self.createTrainSet))  # 从训练集中获取第一个样本
+            self._example = result  # 一对 inputs和labels
+        return result
+    # 列
+    self.columns_indices = {name: i for i, name in enumerate(train_df.columns)}  # 包含X和Y的所有列
+
+
+
+    def make_dataset(self, data: pd.DataFrame) -> tf.data.Dataset:
+        """"""
+        """
+         将原始时间序列数据转换为TensorFlow 的Dataset对象。
+         每个元素是一个(inputs, labels)对。
+         包含批处理的时间序列窗口
+         """
+        data = np.array(data, dtype=np.float32)
+
+        # 原始数据上操作，当设置batch_size=32时，数据集会将这些窗口组合成批次。
+        # 每个batch(批/桶/组）有32个样本 ： 49025行 = 1532批 * 32样本/批
+        # 每个样本是时间步length total_window_size的[sliding window]，每个元素是一个窗口（即一个样本）？
+        ds = timeseries_dataset_from_array(
+            data=data,
+            targets=None,
+            sequence_length=self.total_window_size,
+            sequence_stride=1,
+            shuffle=True,
+            batch_size=32
+        )
+        #  应用split_window函数将每个[批次]的数据分割为输入和标签
+        ds = ds.map(self.split_window)
+
+        return ds
+
+
+
 
 
     def split_window(self, features) -> tuple[tf.Tensor, tf.Tensor]:
@@ -79,51 +125,6 @@ class WindowGenerator:
 
             return inputs, labels
 
-
-    def make_dataset(self, data: pd.DataFrame) -> tf.data.Dataset:
-        """"""
-        """
-         将原始时间序列数据转换为TensorFlow 的Dataset对象。
-         每个元素是一个(inputs, labels)对。
-         包含批处理的时间序列窗口
-         """
-        data = np.array(data, dtype=np.float32)
-
-        # 原始数据上操作，当设置batch_size=32时，数据集会将这些窗口组合成批次。
-        # 每个batch(批/桶/组）有32个样本 ： 49025行 = 1532批 * 32样本/批
-        # 每个样本是时间步length total_window_size的[sliding window]，每个元素是一个窗口（即一个样本）？
-        ds = timeseries_dataset_from_array(
-            data=data,
-            targets=None,
-            sequence_length=self.total_window_size,
-            sequence_stride=1,
-            shuffle=True,
-            batch_size=32
-        )
-        #  应用split_window函数将每个[批次]的数据分割为输入和标签
-        ds = ds.map(self.split_window)
-
-        return ds
-
-    @property
-    def createTrainSet(self) -> tf.data.Dataset:
-        return self.make_dataset(self.train_df)
-
-    @property
-    def createValSet(self) -> tf.data.Dataset:
-        return self.make_dataset(self.val_df)
-    @property
-    def createTestSet(self) -> tf.data.Dataset:
-        return self.make_dataset(self.test_df)
-    @property
-    def example(self) -> Any:
-        """缓存模式，避免每次调用都从数据集中获取样本，每次相同用例
-        """
-        result = getattr(self, '_example', None)  # 尝试获取 _example 属性
-        if result is None:
-            result = next(iter(self.createTrainSet))  # 从训练集中获取第一个样本
-            self._example = result # 一对 inputs和labels
-        return result
 
 
     def window_plot(self, model=None, plot_col='T', max_subplots=3):
@@ -160,5 +161,3 @@ class WindowGenerator:
 
         plt.xlabel('Time [h]')
         plt.show()
-
-

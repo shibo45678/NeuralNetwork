@@ -1,1 +1,1 @@
-from .training_models  import TrainingCnn,TrainingLstm
+from .training_models import TrainingModel

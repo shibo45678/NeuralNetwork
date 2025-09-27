@@ -1,26 +1,242 @@
+from pathlib import Path
+import codecs
+import os
+import csv
+import glob
+from typing import Dict, List
 import pandas as pd
 import numpy as np
-from typing import Tuple, Union,List
 from scipy import stats
-from sklearn.model_selection import train_test_split
+import datetime
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from ..data.exploration import Visualization
+import joblib
 
 
 class DataPreprocessor:
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self.original_df = df.copy()
+    def __init__(self, input_files: list):
+        PROJECT_ROOT = Path(__file__).parent.parent.parent
+        self.dir_path = PROJECT_ROOT / "data"
+        self.input_files = input_files
+        self.merged_df = pd.DataFrame()
+        self.origin_df = self.merged_df.copy()
         self.numeric_columns = None
         self.categorical_columns = None
-        self.history = []  # 记录处理历史
+        self.other_columns = None
+        self.trainSets = pd.DataFrame()
+        self.valSets = pd.DataFrame()
+        self.testSets = pd.DataFrame()
+        self.scalers = {}  # 初始化标准化器字典
+        self.constant_values = {}
+        self.history = None
+
+    """加载文件"""
+
+    def handleEncoding(self):
+        # 1.指定文件所在目录 - 根据源文件名进行命名"new_"
+        # 2.创建空csv文件（拼接路径 os.path.join() - 写入表头）
+        newfile_names = []
+        for i in self.input_files:
+            newfile_name = "new_" + i
+            newfile_names.append(newfile_name)
+
+        for file in newfile_names:
+            new_file_path = os.path.join(self.dir_path, file)
+            # 创建csv写入器
+            with open(new_file_path, mode="w", newline="") as csv_file:
+                writer = csv.writer(csv_file)  # writer.writerow(["",""]) # 写入表头
+
+        """按照确定的 encoding 读取旧文件内容，另存为utf-8编码内容的新文件"""
+        for i in range(len(self.input_files)):
+            original_file = os.path.join(self.dir_path, self.input_files[i])
+            new_file = os.path.join(self.dir_path, newfile_names[i])
+
+            f = open(original_file, "rb+")
+            content = f.read()  # 读取文件内容，content为bytes类型，而非string类型
+            source_encoding = "utf-8"  # 初始化source_encoding
+
+            try:
+                # 尝试以不同的编码解码内容
+                for encoding in ["utf-8", "gbk", "gb2313", "gb18030", "big5", "cp936"]:
+                    try:
+                        decode_content = content.decode(encoding)
+                        source_encoding = encoding
+                        break  # 如果找到匹配的编码，就跳出循环
+                    except UnicodeDecodeError:
+                        pass  # 如果解码失败，继续尝试其他编码
+                else:  # 如果循环结束还没有找到匹配的编码
+                    print("无法确定原始编码")
+
+            except Exception as e:
+                print(f"发生错误：{e}")
+            finally:
+                f.close()  # 确保文件总是关闭的
+
+            # 编码：读取-存取
+            block_size = 4096
+            with codecs.open(original_file, "r", source_encoding) as f:
+                with codecs.open(new_file, "w", "utf-8") as f2:
+                    while True:
+                        content = f.read(block_size)
+                        if not content:
+                            break
+                        f2.write(content)
+
+    """多文件合并"""
+
+    def load_all_data(self, pattern) -> pd.DataFrame:
+        full_pattern = os.path.join(self.dir_path, pattern)
+        all_files = glob.glob(full_pattern)  # 获取解析后的文件
+
+        print(f"搜索模式：{full_pattern}")
+        print(f"找到的文件：{all_files}")
+
+        data_frames = []
+        for file_path in all_files:
+            try:
+                df = pd.read_csv(file_path)
+                data_frames.append(df)
+                print(f"成功读取: {file_path}, 形状: {df.shape}, dtype:{df.dtypes}")
+            except Exception as e:
+                print(f"读取文件失败{file_path}:{str(e)}")
+
+        if data_frames:
+            self.merged_df = pd.concat(data_frames, ignore_index=True)
+
+            # 保存合并后的文件
+            output_file = "merged_data.csv"
+            output_path = os.path.join(self.dir_path, output_file)
+            self.merged_df.to_csv(output_path, index=False)
+            print(f"合并文件将保存到: {output_path}")
+
+            return self.merged_df
+        else:
+            raise ValueError(f"没有找到匹配的文件或所有文件读取失败")
+
+    """描述性分析"""
+
+    def describe_data(self):
+        print("描述性分析如下：")
+        print(self.merged_df.describe())
+
+        self.history.append('数据集描述性分析')
+        return self
+
+    """修复问题列-正则"""
+
+    def problem_columns_fixed(self, problem_columns: list = None) -> 'DataPreprocessor':
+        print("=== 一般问题列正则处理 ===")
+        if problem_columns is None:
+            print("使用修复列功能，但未填待修复问题列")
+            return self
+
+        else:
+            for col in problem_columns:
+                if col in self.origin_df.columns:
+                    sample_value = self.origin_df[col].iloc[0] if len(self.origin_df[col]) > 0 else None
+                    print(f"问题列第一个元素：{sample_value}")
+                    self.origin_df[col] = self.origin_df[col].astype(str).str.extract(r'([-+]?\d*\.?\d+)')[0]
+                    self.origin_df[col] = pd.to_numeric(self.origin_df[col], errors='coerce')
+                    print(f"已转文本，正则清洗，转回数值")
+                else:
+                    print(f"问题列{col}不在 merged_df的列中")
+                    continue
+            self.history.append('修复问题列-正则')
+            return self
+
+    """修复问题列-列包含DF"""
+
+    def special_columns_fixed(self, problem_columns: list = None) -> 'DataPreprocessor':
+
+        print("=== 深入诊断问题列 ===")
+        if problem_columns is None:
+            print("使用深入诊断功能，但未填待修复问题列")
+            return self
+        else:
+            for col in problem_columns:
+                # 检查Series内部结构
+                print(f"Series 类型:{type(self.origin_df[col])}")
+                print(f"Series dtype:{self.origin_df[col].dtype}")
+                print(f"Series形状:{self.origin_df[col].shape}")
+
+                # 先提取再处理
+                series = self.origin_df[col].copy()
+
+                # 一、检查第一个非空值的实际类型,是否是DataFrame（尝试修复）
+                first_check = series.dropna(inplace=False)
+                first_non_null = first_check.iloc[0] if not first_check.empty else None
+                print(f"问题列{col}的第一个元素的dtype:{type(first_non_null)}")
+
+                if isinstance(first_non_null, pd.DataFrame):
+                    print(f"确认{col}列包含DataFrame对象，第一个元素形状：{first_non_null.shape}")
+
+                    if hasattr(first_non_null, 'iloc'):
+                        print("第一个元素有iloc方法")
+                        try:
+                            inner_value = first_non_null.iloc[0, 0] if first_non_null.shape[1] > 0 else \
+                                first_non_null.iloc[0]
+                            print(f"内部值：{inner_value}（类型：{type(inner_value)})")
+                        except:
+                            print("无法访问内部值")
+
+                    # 提取每个DataFrame的第一个值
+                    extracted_values = []
+                    for i, inner_value in enumerate(series):
+                        if isinstance(inner_value, pd.DataFrame) and not inner_value.empty:
+                            # 提取第一个单元格的值
+                            extracted_values.append(inner_value.iloc[0, 0] if inner_value.shape[1] > 0 else np.nan)
+                        else:
+                            extracted_values.append(inner_value)
+
+                    # 创建新的Series
+                    series_fixed = pd.Series(extracted_values, index=series.index, name=col)
+
+                    # 替换原列
+                    self.origin_df[col] = series_fixed
+                    print(f"修复后的{col}列类型: {type(self.origin_df[col].iloc[0])}")
+
+                # 二、检查整列是否有DataFrame（未尝试修复）
+                elif any(isinstance(inner_value, pd.DataFrame) for inner_value in series if pd.notna(inner_value)):
+                    print(f"{col}列中有其他单元格包含DataFrame对象,暂未修复")
+
+                # 三、检查无果填充原值
+                else:
+                    print(f"{col}列不包含DataFrame对象，无需修复")
+
+                # 四、检查Series是否在某些操作下表现出DataFrame行为
+                print("\n=== 行为测试 ===")
+                # 测试1：尝试转置
+                try:
+                    transposed = series.transpose()
+                    print(f"转置结果类型：{type(transposed)}")
+                    if hasattr(transposed, 'shape'):
+                        print(f"转置形状：{transposed.shape}")
+                except Exception as e:
+                    print(f"转置失败：{str(e)}")
+
+                # 测试2：尝试访问列
+                try:
+                    if hasattr(series, 'columns'):
+                        print(f"有columns属性：{series.columns}")
+                    else:
+                        print("没有columns属性")
+                except Exception as e:
+                    print(f"检查columns失败：{str(e)}")
+
+            self.history.append('修复问题列-列包含DF')
+            return self
+
+    """识别列类型"""
 
     def identify_column_types(self):
-        """识别数值型和分类型列"""
+        df = self.origin_df.copy()
+        """识别列类型..."""
         # 数值型列(整型/浮点型）
-        self.numeric_columns = self.df.select_dtypes(include=[np.number]).columns.tolist()
+        self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
         # 分类型列(字符串/分类）
-        self.categorical_columns = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
+        self.categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
         # 其他类型(日期/布尔等) 临时变量，不需要后续方法中频繁使用
-        self.other_columns = self.df.select_dtypes(exclude=[np.number, 'object', 'category']).columns.tolist()
+        self.other_columns = df.select_dtypes(exclude=[np.number, 'object', 'category']).columns.tolist()
 
         print(f"数值型{len(self.numeric_columns)}列: {self.numeric_columns}")
         print(f"分类/字符串型{len(self.categorical_columns)}列: {self.categorical_columns}")
@@ -29,414 +245,679 @@ class DataPreprocessor:
         self.history.append('识别类型')
         return self
 
+    """处理数值型数据"""
+
     def process_numeric_data(self):
         """处理数值型数据"""
         print("处理数值型数据...")
-        # 确认是数值型
-        for col in self.numeric_columns:
-            self.df[col] = pd.to_numeric(self.df[col], errors='coerce')  # 不报错，转NaN ，转整型 .astype('int64')
-        print("确认是数值型列")
+        if self.numeric_columns in None:
+            print("无数值列不需要处理")
+            return self
+        else:
+            # 确认是数值型
+            for col in self.numeric_columns:
+                self.origin_df[col] = pd.to_numeric(self.origin_df[col],
+                                                    errors='coerce')  # 不报错，转NaN ，转整型 .astype('int64')
+            print("数值列已确认是数值型")
+            self.history.append('处理数值型数据')
 
-        self.history.append('处理数值型数据')
         return self
+
+    """处理分类型/字符串数据"""
 
     def encode_categorical_data(self):
         """处理分类型/字符串数据"""
         print("处理分类型/字符串数据...")
+        if self.categorical_columns in None:
+            print("无分类型/字符串型列不需要处理")
+            return self
+        else:
+            for col in self.categorical_columns:
+                if col == 'Date Time':
+                    # 处理字符串时间 并排好序
+                    datetime = pd.to_datetime(self.origin_df.pop(col), format='%d.%m.%Y %H:%M:%S')
+                    self.origin_df[col] = datetime
+                    self.origin_df = self.origin_df.sort_values(col, ascending=True)
+                    print(f"已处理时间字符串列{col}，转成datetime格式")
 
-        for col in self.categorical_columns:
-            if col == 'Date Time':
-                # 处理字符串时间 并排好序
-                datetime = pd.to_datetime(self.df.pop(col), format='%d.%m.%Y %H:%M:%S')
-                self.df[col] = datetime
-                self.df = self.df.sort_values(col, ascending=True)
-                print(f"处理时间字符串列{col},转成datetime格式")
+                # 处理分类
+                # 1.分类数量少，星期几月(独热编码)
+                # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
+                # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
+            self.history.append('处理分类型/字符串数据')
+            return self
 
-            # 处理分类
-            # 1.分类数量少，星期几月(独热编码)
-            # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
-            # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
-        self.history.append('处理分类型/字符串数据')
-        return self
+    """处理其他型(时间/布尔)数据"""
 
     def process_other_data(self):
         print("处理其他型(时间/布尔)数据...")
-        if self.other_columns:
-            other_df = self.df[self.other_columns]
-        self.history.append('处理其他型(时间/布尔)数据')
+        if self.other_columns is None:
+            print("无其他型(时间/布尔)不需要处理")
+            return self
+        else:
+            other_df = self.origin_df[self.other_columns]
+            self.history.append('处理其他型(时间/布尔)数据')
+
         return self
+
+    """处理缺失值"""
 
     def handle_missing_values(self,
                               cat_strategy: str = 'custom',  # 支持众数填充/自定义Missing填充
                               num_strategy: str = 'mean', num_fill_value=None):  # 支持均值/众数/中位数/常数填充需写num_fill_value
         """处理缺失值"""
         print("==========统计空值结果==========")
-        print(self.df.isna().sum())
+        print(self.origin_df.isna().sum())
 
         print("处理缺失值...")
-        """1.分类列/字符列填充"""
+        # 1.分类列/字符列填充
         for col in self.categorical_columns:
-            if self.df[col].isna().any():
+            if self.origin_df[col].isna().any():
                 # 众数填充
                 if cat_strategy == 'mode':
                     # 确保列中有非空值来计算众数
-                    non_null_data = self.df[col].dropna()
+                    non_null_data = self.origin_df[col].dropna()
                     if len(non_null_data) > 0:
                         mode_val = non_null_data.mode()  # 多个众数
                         if len(mode_val) > 0:
-                            self.df[col].fillna(mode_val[0], inplace=True)
+                            self.origin_df[col].fillna(mode_val[0], inplace=True)
                             print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(第1个众数)")
                         else:
-                            self.df[col].fillna('Unknown', inplace=True)
+                            self.origin_df[col].fillna('Unknown', inplace=True)
                             print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(仅1个众数)")
                     else:  # 整列空值，填充Missing
-                        self.df[col].fillna('Missing', inplace=True)
+                        self.origin_df[col].fillna('Missing', inplace=True)
                         print(f"categorical:{col}列，{cat_strategy}填充模式无法填充(整列空值)")
 
                 # 自定义Missing
                 if cat_strategy == 'custom':
-                    self.df[col].fillna('Missing', inplace=True)
+                    self.origin_df[col].fillna('Missing', inplace=True)
                     print(f"categorical:{col}列，'自定义'填充模式(保留Missing)")
 
-        """2.数值列填充"""
+        # 2.数值列填充
         for col in self.numeric_columns:
-            if self.df[col].isna().sum() > 0:
+            if self.origin_df[col].isna().sum() > 0:
                 if num_strategy == 'mean':
-                    self.df[col].fillna(self.df[col].mean(), inplace=True)
-                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.df[col].mean()}")
+                    self.origin_df[col].fillna(self.origin_df[col].mean(), inplace=True)
+                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mean()}")
                 elif num_strategy == 'median':
-                    self.df[col].fillna(self.df[col].median(), inplace=True)
-                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.df[col].median()}")
+                    self.origin_df[col].fillna(self.origin_df[col].median(), inplace=True)
+                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].median()}")
                 elif num_strategy == 'mode':  # 第一个众数
-                    self.df[col].fillna(self.df[col].mode()[0], inplace=True)
-                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.df[col].mode()[0]}")
+                    self.origin_df[col].fillna(self.origin_df[col].mode()[0], inplace=True)
+                    print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mode()[0]}")
                 elif num_strategy == 'constant' and num_fill_value is not None:
-                    self.df[col].fillna(num_fill_value, inplace=True)
+                    self.origin_df[col].fillna(num_fill_value, inplace=True)
                     print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{num_fill_value}")
 
         self.history.append('处理缺失值')
         return self
 
+    """移除重复值"""
+
     def remove_duplicates(self):
         """移除重复行"""
         print("移除重复行...")
-        df = self.df.copy()
+        df = self.origin_df.copy()
         # 所有重复的行都为True，只有唯一的行为False,默认'first'是False被保留
         duplicate_mask = df.duplicated(keep=False)
         duplicate_rows = df[duplicate_mask]
+        # duplicate_rows.to_csv("duplicate_rows.csv") # 下载重复数据
 
-        initial_count = len(self.df)
-        self.df.drop_duplicates(inplace=True)
-        removed_count = initial_count - len(self.df)
+        initial_count = len(self.origin_df)
+        self.origin_df.drop_duplicates(inplace=True)
+        removed_count = initial_count - len(self.origin_df)
         print(f"移除了{removed_count}个重复行")
 
         self.history.append("处理重复行")
         return self
 
+    """删除无用列"""
+
     def delete_useless_cols(self, target_cols: list = None):
         """移除无用列"""
         print("移除无用列...")
-        self.history.append("移除无用列")
-        return self
-
-    def create_extreme_features_zscore(self, threshold: int = 3):  # z = (x - μ) / σ 单位标准差 >=3个标准差算异常
-        self.identify_column_types()
-        """使用Z-score方法标记每列异常值"""
-        df = self.df.copy()
-        print(f"检测数值列异常值(zscore)...")
-
-        all_outliers_list = []
-        for col in self.numeric_columns:
-            z_scores = np.abs(stats.zscore(df[col].dropna()))
-            outlier_mask = (z_scores >= threshold)
-            # 获取异常值的索引
-            outlier_indices = df[col].dropna().index[outlier_mask]
-
-            if len(outlier_indices) > 0:
-                outlier_df = (df.loc[outlier_indices].copy()
-                              .assign(outlier_source=col,
-                                      z_score=z_scores[outlier_mask],
-                                      original_index=outlier_indices))
-
-                all_outliers_list.append(outlier_df)
-                print(f"列'{col}':检测到{len(outlier_df)}个异常值")
-            else:
-                print(f"列'{col}':未检测到异常值")
-
-        # 一次合并所有结果
-        if all_outliers_list:
-            all_outliers = pd.concat(all_outliers_list, ignore_index=True)
-
-            # 一列多个异常结果合并
-            result_df = (all_outliers.groupby(self.numeric_columns)
-                         .agg(extreme_tag=('outlier_source', list),
-                              abnormal_count=('outlier_source', 'count'),
-                              original_index=('original_index', 'first'))
-                         )
-            result_df.to_csv("extreme_features_zscore.csv")
+        if target_cols is None:
+            print("调用删除无用列功能，但未填写列名")
+            return self
         else:
-            all_outliers = pd.DataFrame()
-
-        self.history.append("检测数值列异常值(zscore)")
+            self.origin_df.drop(target_cols, axis=1)
+            print(f"移除了{len(target_cols)}个列")
+            self.history.append("移除无用列")
         return self
 
-    def create_extreme_features_iqr(self, threshold: float = 1.5):
-        self.identify_column_types()
-        """使用IQR方法标记每列异常值"""
-        df = self.df.copy()
-        print(f"检测数值列异常值(iqr)...")
+    """查看数值列异常值(3种方式)"""
 
-        all_outliers_list = []
-        for col in self.numeric_columns:
+    def check_extreme_features(self, method: Dict = None):  # z = (x - μ) / σ 单位标准差 >=3个标准差算异常
+        print("查看数值列异常值...")
+        """使用IQR或Z-score或ISO方法标记异常值
+            method : Dict, optional
+                检测方法配置，默认使用Z-score
+                Example: or {'name': 'zscore', 'threshold': 3}
+                         or {'name':'zscore','threshold':3}
+                         or {'name':'multivariate','contamination':0.025}
+        """
+        if method is None:
+            print("不查看异常值")
 
-            if len(df[col].unique()) >= 4:
-                Q1, Q3 = self.df[col].quantile([0.25, 0.75])
-                IQR = Q3 - Q1
-                lower_bound = Q1 - threshold * IQR
-                upper_bound = Q3 + threshold * IQR
-                outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
-                outlier_indices = df[col].index[outlier_mask]
+        if method['name'] == 'zscore':  # {'name':'zscore','threshold':3}
+            """使用Z-score方法标记每列异常值"""
+            df = self.origin_df.copy()
+            print(f"检测数值列异常值(zscore)...")
 
-                if outlier_mask.sum() > 0:
+            all_outliers_list = []
+            for col in self.numeric_columns:
+                clean_series = df[col].dropna()
+                z_scores = np.abs(stats.zscore(clean_series))
+                outlier_mask = (z_scores >= method['threshold'])
+                # 获取异常值的索引
+                outlier_indices = clean_series.index[outlier_mask]  # 保持一致 dropna
+
+                if len(outlier_indices) > 0:
                     outlier_df = (df.loc[outlier_indices].copy()
                                   .assign(outlier_source=col,
-                                          original_index=outlier_indices))  # 原始索引取出便于后续修改
+                                          z_score=z_scores[outlier_mask],
+                                          original_index=outlier_indices))
 
                     all_outliers_list.append(outlier_df)
                     print(f"列'{col}':检测到{len(outlier_df)}个异常值")
                 else:
                     print(f"列'{col}':未检测到异常值")
 
+            # 一次合并所有结果
+            if all_outliers_list:
+                all_outliers = pd.concat(all_outliers_list, ignore_index=True)
+
+                # 一列多个异常结果合并
+                result_df = (all_outliers.groupby(self.numeric_columns)
+                             .agg(extreme_tag=('outlier_source', list),  # 按照所有列聚合后，统计某行数据的异常来源
+                                  abnormal_count=('outlier_source', 'count'),
+                                  original_index=('original_index', 'first'))
+                             )
+                # result_df.to_csv("extreme_features_zscore.csv")
             else:
-                print(f"列'{col}':唯一值样本数不足4个，IQR判断不适用，需要改用其他方法判断")
+                all_outliers = pd.DataFrame()
+                print("所有列都未检查到异常值zscore")
 
-        # 一次合并所有结果
-        if all_outliers_list:
-            all_outliers = pd.concat(all_outliers_list, ignore_index=True)
+            self.history.append("检测数值列异常值(zscore)")
+            return self
 
-            # 一列多个异常结果合并
-            result_df = (all_outliers.groupby(self.numeric_columns)
-                         .agg(extreme_tag=('outlier_source', list),
-                              abnormal_count=('outlier_source', 'count'),
-                              original_index=('original_index', 'first')))
-            result_df.to_csv("extreme_features_iqr.csv")
-        else:
-            all_outliers = pd.DataFrame()
+        if method['name'] == 'iqr':
+            """使用IQR方法标记每列异常值"""
+            df = self.origin_df.copy()
+            print(f"检测数值列异常值(iqr)...")
 
-        self.history.append("检测数值列异常值(iqr)")
-        return self
+            all_outliers_list = []
+            for col in self.numeric_columns:
+                clean_series = df[col].dropna()
+                if len(clean_series) >= 4 and len(clean_series.unique()) >= 4:  # 默认inplace=False
+                    try:
+                        Q1, Q3 = clean_series.quantile([0.25, 0.75])
+                        IQR = Q3 - Q1
+                        if IQR == 0:  # 所有值相同
+                            print(f"警告: 列 {col} 的IQR为0，可能所有值都相同")
+                            continue
 
-    def create_extreme_features_multivariate(self, contamination=0.025):  # 预期异常比例 ≈2.5%
-        self.identify_column_types()
-        """多变量联合异常检测
-           多变量联合分析，不是逐列处理
-           某个点可能单个特征正常，但多个特征的组合异常
-        """
-        df = self.df.copy()
-        print(f"检测联合异常值(iso_forest)...")
+                        lower_bound = Q1 - method['threshold'] * IQR
+                        upper_bound = Q3 + method['threshold'] * IQR
+                        outlier_mask = (clean_series < lower_bound) | (clean_series > upper_bound)  # 或
+                        outlier_indices = clean_series.index[outlier_mask]
 
-        from sklearn.ensemble import IsolationForest
-        # 1.使用隔离森林检测整体异常
-        iso_forest = IsolationForest(
-            contamination=contamination,
-            random_state=42
-        )
-        outliers = iso_forest.fit_predict(df[self.numeric_columns])
+                        if np.any(outlier_mask):  # sum() > 0 非最语义化,性能差，需要计算所有值的和
+                            outlier_df = (df.loc[outlier_indices].copy()
+                                          .assign(outlier_source=col,
+                                                  original_index=outlier_indices))  # 原始索引取出便于后续修改
 
-        # 2.标记异常点
-        df['is_outlier'] = outliers == -1
-        print(f"检测到{df['is_outlier'].sum()}个多变量异常点")
-        outliers_indices = df.index[outliers == -1]
-        result_df = df.loc[outliers_indices]
-        result_df.to_csv("extreme_features_isoforest.csv")
+                            all_outliers_list.append(outlier_df)
+                            print(f"列'{col}':检测到{len(outlier_df)}个异常值")
+                        else:
+                            print(f"列'{col}':未检测到异常值")
 
-        self.history.append("检测数值列异常值(iso_forest)")
-        return self
+                    except Exception as e:
+                        print(f"计算列 {col} 的IQR时出错: {e}")
 
-    def get_history(self):
-        return self.history  # 查看清理历史
+                else:
+                    print(f"列'{col}':唯一值样本数不足4个，IQR判断不适用，需要改用其他方法判断")
 
-    def get_summary(self):
-        """获取处理摘要"""
-        original_shape = self.original_df.shape
-        processed_shape = self.df.shape
+            # 一次合并所有结果
+            if all_outliers_list:
+                all_outliers = pd.concat(all_outliers_list, ignore_index=True)
 
-        print(f"原始数据形状：{original_shape}")
-        print(f"处理后数据形状：{processed_shape}")
-        print(f"移除了 {original_shape[0] - processed_shape[0]} 行")
-        return self
+                # 一列多个异常结果合并
+                result_df = (all_outliers.groupby(self.numeric_columns)
+                             .agg(extreme_tag=('outlier_source', list),
+                                  abnormal_count=('outlier_source', 'count'),
+                                  original_index=('original_index', 'first')))
+                # result_df.to_csv("extreme_features_iqr.csv")
+            else:
+                all_outliers = pd.DataFrame()
 
-    def get_processed_data(self):
-        return self.df.copy()
+            self.history.append("检测数值列异常值(iqr)")
+            return self
 
-    # 通过方法暴露数据
-    def get_numeric_columns(self):
-        """获取数值型列名"""
-        if self.numeric_columns is None:
-            self.identify_column_types()
-        return self.numeric_columns.copy()  # 返回副本避免外部修改
+        if method['name'] == 'multivariate':  # {'name':'multivariate','contamination':0.025}
+            """多变量联合异常检测
+               多变量联合分析，不是逐列处理
+               某个点可能单个特征正常，但多个特征的组合异常"""
+            df = self.origin_df.copy()
+            print(f"检测联合异常值(iso_forest)...")
 
-    def get_categorical_columns(self):
-        if self.categorical_columns is None:
-            self.identify_column_types()
-        return self.categorical_columns.copy()
+            from sklearn.ensemble import IsolationForest
+            # 1.使用隔离森林检测整体异常
+            iso_forest = IsolationForest(
+                contamination=method['contamination'],  # 预期异常比例 ≈2.5%
+                random_state=42
+            )
+            outliers = iso_forest.fit_predict(df[self.numeric_columns])
 
+            # 2.标记异常点
+            df['is_outlier'] = outliers == -1
+            print(f"检测到{df['is_outlier'].sum()}个多变量异常点")
+            outliers_indices = df.index[outliers == -1]
+            result_df = df.loc[outliers_indices]
+            # result_df.to_csv("extreme_features_isoforest.csv")
 
-class DataResampler:
-    """数据重采样"""
+            self.history.append("检测数值列异常值(iso_forest)")
+            return self
 
-    def __init__(self, data: pd.DataFrame):
-        self.original_data = data.copy()
-        self.resampled_data = None
+    """=============================================== 抽样数据 ============================================="""
 
-    def systematic_resample(self,
-                            start_index: int = 0,
-                            step: int = 1) -> 'DataResampler':
+    """系统抽样（等间隔抽样）"""
+
+    def systematic_resample(self, start_index: int = 5, step: int = 6) -> 'DataPreprocessor':
         """系统抽样（等间隔抽样）"""
-        # 保证数据是排好序的
-        self.resampled_data = self.original_data.iloc[start_index::step]
-        print(f"等间隔抽样: 从索引 {start_index} 开始，步长 {step}，共 {len(self.resampled_data)} 个样本")
+        print("系统抽样（等间隔抽样）...")
 
-        return self  # 返回实例本身以支持链式调用
+        # 保证时间数据是排好序的
+        original_shape = self.origin_df.shape
+        self.origin_df = self.origin_df.iloc[start_index::step]
+        resampled_shape = self.origin_df.shape
 
-    def time_based_resample(
-            self,
-            time_column: str = None,
-            freq: str = 'H',  # 重采样频率 ('H'-小时, 'D'-天, 'W'-周等)
-            aggregation: str = 'mean'  # 聚合方法 ('mean', 'sum', 'max', 'min', 'first', 'last')
-    ) -> 'DataResampler':
-        """基于时间的重采样（适用于时间序列数据）"""
-        if time_column not in self.original_data.columns:
-            raise ValueError(f"时间列 '{time_column}' 不存在")
-
-        self.resampled_data = (
-            self.original_data
-            .set_index(time_column)
-            .resample(freq)
-            .agg(aggregation)
-            .reset_index()
-        )
-        print(f"时间重采样: 频率 {freq}，聚合方法 {aggregation}")
-
-        return self
-
-    def get_summary(self):
-        """获取处理摘要"""
-        original_shape = self.original_data.shape
-        resampled_shape = self.resampled_data.shape
-
+        print(f"等间隔抽样: 从索引 {start_index} 开始，步长 {step}，共 {len(self.origin_df)} 个样本")
         print(f"原始数据形状：{original_shape}")
         print(f"重采样后数据形状：{resampled_shape}")
         print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
+        self.history.append("系统抽样(等间隔抽样)")
+        return self  # 返回实例本身以支持链式调用
+
+    """基于时间重采样"""
+
+    def time_based_resample(self, time_column: str = None,
+                            freq: str = 'H',  # 重采样频率 ('H'-小时, 'D'-天, 'W'-周等)
+                            aggregation: str = 'mean'  # 聚合方法 ('mean', 'sum', 'max', 'min', 'first', 'last')
+                            ) -> 'DataPreprocessor':
+        """适用于时间序列数据"""
+        print("基于时间重采样...")
+
+        if time_column not in self.origin_df.columns:
+            print(f"时间列 '{time_column}' 不存在于数据中，未完成基于时间序列的采样")
+            return self
+
+        else:
+            original_shape = self.origin_df.shape
+            self.origin_df = (
+                self.origin_df
+                .set_index(time_column)
+                .resample(freq)
+                .agg(aggregation)
+                .reset_index()
+            )
+            resampled_shape = self.origin_df.shape
+
+            print(f"时间重采样: 频率 {freq}，聚合方法 {aggregation}")
+            print(f"原始数据形状：{original_shape}")
+            print(f"重采样后数据形状：{resampled_shape}")
+            print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
+            self.history.append("基于时间重采样")
+            return self
+
+    """=============================================== 极端数据 ============================================="""
+
+    """处理异常值"""
+
+    def remove_outliers(self, method: Dict = None, target_col: str = None) -> 'DataPreprocessor':
+        """业务判断：物理上不可能的值 / 极端数据，返回表格，根据索引处理
+           目前支持简单物理异常 + 单列异常
+           params: method
+           {'name':'custom', } 自定义
+           {'name':'singe_zscore','thredhold': 3 }
+           {'name':'singe_iqr','thredhold': 1.5 }
+           custom 方式可以不用提供target_cols，目前是写死的
+           """
+
+        if method is None:
+            print("未提供异常值处理方式，暂不处理")
+            return self
+
+        if method['name'] == 'custom':
+            print("处理异常值-物理不可能...")
+            # 'wv'平均风速,'max. wv'最大风速列小于0，需将-9999 替换 为0，非删
+            print(self.origin_df[self.origin_df['wv'] < 0]['wv'])
+            print(self.origin_df[self.origin_df['max. wv'] < 0]['max. wv'])
+
+            self.origin_df.loc[self.origin_df['wv'] == -9999.0, 'wv'] = 0
+            self.origin_df.loc[self.origin_df['max. wv'] == -9999.0, 'max. wv'] = 0
+
+            self.history.append("处理异常值-物理不可能")
+            return self
+
+        if method['name'] == 'singe_zscore':
+            # 使用Z-score方法移除[单列]异常值，不for循环防止造成数据偏差
+            print(f"处理{target_col}列异常值(zscore)...")
+
+            # 防止有无用列被删除，可以更新一下 self.numeric_columns
+            df = self.origin_df.copy()
+            self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+            if target_col in self.numeric_columns:
+                cleaned_series = df[target_col].dropna()
+
+                z_scores = np.abs(stats.zscore(cleaned_series))
+                before_count = len(cleaned_series)  # 从dropna()后算，仅算异常值数
+                normal_mask = (z_scores < method['threshold'])
+                normal_indices = cleaned_series.index[normal_mask]
+                self.origin_df = df.loc[normal_indices]
+                after_count = len(self.origin_df)
+
+                if before_count != after_count:
+                    print(f"列'{target_col}':移除了 {before_count - after_count} 个异常值")
+                else:
+                    print(f"列'{target_col}':无异常值可移除")
+            else:
+                print(f"列'{target_col}'不在数据中")
+
+            self.history.append(f"处理列异常值-z_scores")
+            return self
+
+        if method['name'] == 'singe_iqr':
+            print(f"处理{target_col}列异常值(iqr)...")
+            # 使用IQR方法移除异常值
+            df = self.origin_df.copy()
+            self.numeric_columns = df.select_dtype(include=[np.number]).columns.tolist()
+
+            if target_col in self.numeric_columns:
+                cleaned_series = df.dropna()
+
+                if len(cleaned_series) >= 4 and len(cleaned_series.unique()) >= 4:
+                    Q1, Q3 = cleaned_series.quantile([0.25, 0.75])
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - method['threshold'] * IQR
+                    upper_bound = Q3 + method['threshold'] * IQR
+                    normal_mask = (cleaned_series >= lower_bound) & (cleaned_series <= upper_bound)
+
+                    before_count = len(cleaned_series)
+                    self.origin_df = df.loc[normal_mask]
+                    after_count = len(self.origin_df)
+
+                    if before_count != after_count:
+                        print(f"列'{target_col}':移除了 {before_count - after_count} 个异常值")
+                    else:
+                        print(f"列'{target_col}':无异常值可移除")
+                else:
+                    print(f"列'{target_col}':唯一值数量小于4，iqr计算不可靠")
+            else:
+                print(f"列'{target_col}'不在数据中")
+
+            self.history.append(f"处理列异常值-iqr")
+
+            return self
+
+    """=============================================== 其他特殊处理 ============================================="""
+
+    """时间序列特别处理"""
+
+    def handle_time_col(self, col: str = None, format: str = None) -> 'DataPreprocessor':
+        """处理时间列数据
+           params: format 时间列原格式 """
+        print(f"处理时间{col}数据...")
+        df = self.origin_df.copy()
+
+        # a.str -> datatime（原df中删除'Data Time'列）
+        date_time = pd.to_datetime(df.pop(col), format=format)
+        print(date_time.head(5))
+
+        # b.将data_time中数据转换为时间戳格式的数据
+        print(datetime.datetime.timestamp(date_time[5]))
+        timestamp_s = date_time.map(datetime.datetime.timestamp)
+        print(timestamp_s)
+
+        # c.将时刻序列映射为正弦曲线序列
+        day = 24 * 60 * 60  # 一天多少秒
+        year = (365.2425) * day  # 一年多少秒
+
+        df['Day sin'] = np.sin((timestamp_s * 2 * np.pi) / day)
+        df['Day cos'] = np.cos(timestamp_s * (2 * np.pi / day))
+        df['Year sin'] = np.sin((timestamp_s / year) * 2 * np.pi)
+        df['Year cos'] = np.cos(timestamp_s * (2 * np.pi / year))
+        print("新增4列：['Day sin', 'Day cos', 'Year sin', 'Year cos']")
+
+        self.origin_df = df
+        print(f"时间列数据已处理，新增4列:'Day sin', 'Day cos', 'Year sin', 'Year cos'")
+        print(self.origin_df.loc[0:2, ['Day sin', 'Day cos', 'Year sin', 'Year cos']])
+
+        # d.将转换结果可视化
+        viz = Visualization()
+        viz.plot_time_signals(X=np.array(self.origin_df['Day sin'])[:25],  # 24小时
+                              y=np.array(self.origin_df['Day cos'])[:25],
+                              xlabel='时间[单位：时]（Time [h]）',
+                              title='一天中的时间信号（Time of day signal）')
+
+        self.history.append("处理时间数据-正余弦")
         return self
 
-    def get_resampled_data(self) -> pd.DataFrame:
-        """上面需要支持链式调用"""
-        return self.resampled_data.copy()
+    def handle_vec_col(self, dir_cols: List[str] = None, var_cols: List[str] = None) -> 'DataPreprocessor':
+        """将'风向角度制'和'风速列极坐标'数据转换为风矢量
+        dir_cols: 角度值的方向数据，
+        var_cols: 极坐标的风速数据"""
 
+        # 处理前:用极坐标（风速m/s）和风向（0-360）来描述风的强度和方向，
+        # 处理后:用正交坐标系的两个维度（x轴和y轴）上风的强度，来描述上述'风速'和'风向' ['Wx', 'Wy', 'max Wx', 'max Wy']
+        print("处理风矢量...")
+        if dir_cols is None or var_cols is None:
+            print("无'方向'(弧度制)数据、无'速度变量'数据需要处理")
+            return self
 
-class DataSplitter:
-    def __init__(self, df:pd.DataFrame):
-        self.df = df
-        self.trainSets =pd.DataFrame()
-        self.valSets = pd.DataFrame()
-        self.testSets = pd.DataFrame()
-        self.scalers = {}  # 初始化标准化器字典
+        else:
+            df = self.origin_df.copy()
+            print(df.loc[0:2, dir_cols + var_cols])  # 平均风速、最大风速、风向（角度制）
 
+            # 处理步骤：
+            # a.将风向和风速列数据转换为风矢量，重新存入原数据框中
+            # b.2D直方图--通过可视化的方式解释风矢量类型的数据由于原表风速和风向数据的原因
+
+            # 原表风速和风向数据
+            Visualization.plot_hist2d(x=df[dir_cols[0]],  # 'wd'
+                                      y=df[var_cols[0]],  # 'wv'
+                                      xlabel=f'{dir_cols[0]} 风向 [单位：度]',
+                                      ylabel=f'{var_cols[0]} 风速 [单位：米/秒]')
+
+            # 风矢量类型的数据
+            wd_rad = df.pop(dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
+            wv = df.pop(var_cols[0])  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
+            max_wv = df.pop(var_cols[1])
+
+            df['Wx'] = wv * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
+            df['Wy'] = wv * np.sin(wd_rad)
+
+            df['max Wx'] = max_wv * np.cos(wd_rad)  # 计算最大风力'max. mv'的x和y分量，保存到df的'max Wx'列和'max Wy'列中
+            df['max Wy'] = max_wv * np.sin(wd_rad)
+
+            # 不需要初始化任何东西，最适合静态方法，然后类名调用
+            Visualization.plot_hist2d(x=df['Wx'],
+                                      y=df['Wy'],
+                                      xlabel='风的X分量[单位：m/s]',
+                                      ylabel='风的Y分量[单位：m/s]')
+
+            Visualization.plot_hist2d(x=df['max Wx'],
+                                      y=df['max Wy'],
+                                      xlabel='最大风的X分量[单位：m/s]',
+                                      ylabel='最大风的Y分量[单位：m/s]')
+
+            # 对比两图，分解后有利于我们观察风的状况：找到原点（0，0），
+            # 假设向上为北，那么南方向的 风出现次数较多，此外我们还可以观察到东北-西南方向的风
+            self.history.append("处理风矢量")
+            return self
+
+    """=============================================== 切分数据集并标准化 ============================================="""
+
+    """切分数据集"""
 
     def train_val_test_split(self,
                              train_size: float = 0.7,
                              val_size: float = 0.2,
-                             test_size: float = 0.1) -> 'DataSplitter':
-
+                             test_size: float = 0.1) -> 'DataPreprocessor':
         """时间序列的分层，按顺序整体切3部分"""
-        n = len(self.df)
-        self.trainSets = self.df.iloc[0:int(n * train_size)]
-        self.valSets = self.df.iloc[int(n * train_size):int(n * (train_size + val_size))]
-        self.testSets = self.df.iloc[int(n * (train_size + val_size)):]
+        print("切分数据集...")
+        df = self.origin_df.copy()
+
+        n = len(df)
+        self.trainSets = df.iloc[0:int(n * train_size)]
+        self.valSets = df.iloc[int(n * train_size):int(n * (train_size + val_size))]
+        self.testSets = df.iloc[int(n * (train_size + val_size)):]
 
         print(
             f"数据分割完成: 训练集 {len(self.trainSets)} 样本, 验证集 {len(self.valSets)} 样本,测试集 {len(self.testSets)} 样本")
+        self.history.append("切分数据集")
         return self
+
+    """检查验证集"""
 
     def has_validation_set(self) -> bool:
         """检查是否有验证集"""
         return not self.valSets.empty and len(self.valSets) > 0
 
-    def standardize_data(self) -> 'DataSplitter':  # 即zscore（原值-均值）/ 标准差
-        """Z_score标准化（使用训练集统计量）"""
-        print("数据标准化(zscore)...")
+    """数据标准化/归一化"""
 
-        for col in self.df.columns:
+    def unify_feature_scaling(self, method: Dict = None, **kwargs) -> 'DataPreprocessor':  # 即zscore（原值-均值）/ 标准差
+        """统一标准化和归一化数值特征
+        Parameters
+        ----------
+        method : str, default 'standardize'
+            填写格式：
+            - {'name':'standardize' , 'threshold':3 } 标准化 (Z-score) - 均值0，标准差1
+            - {'name':'normalize'  } 归一化 - 缩放到 [0, 1] 范围 """
+        if method is None:
+            print("统一数据格式但未提供方法")
+            return self
 
-            if self.trainSets[col].notna().sum() > 1:  # 至少2个非空
-                train_col = self.trainSets[col].dropna()
-                mean_val = train_col.mean()  # 防止数据泄漏 只用训练集的均值和标准差
-                std_val = train_col.std()
+        df = self.origin_df.copy()
+        # 时间列不标准化：时间列 、 onehot分类列
+        time_cols = ['Day sin', 'Day cos', 'Year sin', 'Year cos']  # 时间特征列
+        cat_cols = [col for col in df.colomns if
+                    col.startwith('season_') or col.startswith('weather_')]  # 分类列
+        mask = ~np.isin(df.columns, time_cols + cat_cols)
+        numeric_scale_cols = df.colomns[mask].tolist()
 
-                if std_val > 1e-8:  # 避免除零错误
-                    self.trainSets.loc[:,col] = (self.trainSets[col] - mean_val) / std_val
+        # Z_score标准化（使用训练集统计量）
+        if method['name'] == 'standardize':
+            print("数据标准化(zscore)...")
+            self.scalers = {}
+            self.constant_values = {}  # 保存常数列的原始值
 
-                    if self.has_validation_set() and col in self.valSets.columns:
-                        self.valSets.loc[:,col] = (self.valSets[col] - mean_val) / std_val
+            for col in numeric_scale_cols:
 
-                    if not self.testSets.empty and col in self.testSets.columns:
-                        self.testSets.loc[:,col] = (self.testSets[col] - mean_val) / std_val
+                if self.trainSets[col].notna().sum() > 1:  # 至少2个非空
+                    train_col = self.trainSets[col].dropna()  # 自动处理
+                    col_mean = train_col.mean()  # 防止数据泄漏 只用训练集的均值和标准差
+                    col_std = train_col.std()
 
-                    self.scalers[col] = {'type': 'zscore', 'mean': mean_val, 'std': std_val, 'method': 'standardize'}
-                    print(f"列 {col}: Z-score 标准化完成")
+                    if col_std == 0:  # 处理零标准差情况
+                        self.constant_values[col] = col_mean
+                        print(f"列{col} 的均值为{col_mean}，标准差为0 ，设为常数0")
+                        self.trainSets[col] = 0  # 所有值相同，设为0
+                        if self.has_validation_set() and col in self.valSets.columns:
+                            self.valSets[col] = 0
+                        if not self.testSets.empty and col in self.testSets.columns:
+                            self.testSets[col] = 0
+                        self.scalers[col] = 'constant'
 
-                else:
-                    # 处理零标准差情况
-                    print(f"列{col} 标准差为0 ，跳过标准化")
-                    self.trainSets[col] = 0  # 所有值相同，设为0
-                    if self.has_validation_set() and col in self.valSets.columns:
-                        self.valSets[col] = 0
-                    if not self.testSets.empty and col in self.testSets.columns:
-                        self.testSets[col] = 0
-                    print(f"列 {col}: 标准差为0，设为常数0")
+                    else:  # std_z > 1e-8 避免除零错误
+                        scaler = StandardScaler()
+                        scaler.fit(train_col)
+                        self.scalers[col] = scaler
 
-        return self
+                        self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
+                        print(f"训练集列{col}:z_score 标准化完成")
+                        if self.has_validation_set() and col in self.valSets.columns:
+                            self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
+                            print(f"验证集列{col}:z_score 标准化完成")
+                        if not self.testSets.empty and col in self.testSets.columns:
+                            self.testSets[col] = scaler.transform(self.testSets[col].values.reshape(-1, 1)).flatten()
+                            print(f"测试集列{col}:z_score 标准化完成")
+                        print(f"列 '{col}': 标准化完成 (均值: {col_mean:.2f}, 标准差: {col_std:.2f})")
 
-    def normalize_data(self) -> 'DataSplitter':  # 归一化 (Normalization)	(x - min) / (max - min)
-        """Min-Max 归一化（使用训练集统计量）"""
-        print("数据归一化(min_max)...")
-        for col in self.df.columns:
+                else:  # 数据不足
+                    print(f"列{col}:训练集数据不足，跳过标准化")
+                    self.scalers[col] = None
 
-            if self.trainSets[col].notna().sum() > 1:
-                train_col = self.trainSets[col].dropna()
-                min_val = train_col.min()
-                max_val = train_col.max()
+            self.history.append("数值列标准化(zscore)")
+            return self
 
-                if max_val > min_val:
-                    self.trainSets.loc[:,col] = (self.trainSets[col] - min_val) / (max_val - min_val)
-                    print(f"训练集列{col}:min_max 归一化完成")
+        # Min-Max 归一化（使用训练集统计量）
+        if method['name'] == 'normalize':
+            # 归一化 (Normalization)	(x - min) / (max - min)
+            # scaler = MinMaxScaler(feature_range=(0, 1))  # 可选-1，1
+            print("数据归一化(min_max)...")
 
-                    if self.has_validation_set() and col in self.valSets.columns:
-                        self.valSets.loc[:,col] = (self.valSets[col] - min_val) / (max_val - min_val)
-                        print(f"验证集列{col}:min_max 归一化完成")
+            self.scalers = {}  # 保存每个列独立的scaler
+            self.constant_values = {}  # 保存常数列的原始值
 
-                    if not self.testSets.empty and col in self.testSets.columns:
-                        self.testSets.loc[:,col] = (self.testSets[col] - min_val) / (max_val - min_val)
-                        print(f"测试集列{col}:min_max 归一化完成")
+            for col in numeric_scale_cols:
 
-                    self.scalers[col] = {'type': 'minmax', 'min': min_val, 'max': max_val, 'method': 'normalize'}
-                    print(f"列 {col}: 归一化完成")
+                # 训练数据充足
+                if self.trainSets[col].notna().sum() > 1:
+                    train_col = self.trainSets[col].dropna()
+                    col_max = train_col.max()
+                    col_min = train_col.min()
 
-                else:  # 所有值相同的情况
-                    self.trainSets[col] = 0
-                    if self.has_validation_set() and col in self.valSets.columns:
-                        self.valSets[col] = 0
-                    if not self.testSets.empty and col in self.testSets.columns:
-                        self.testSets[col] = 0
-                    print(f"列 '{col}': 最大值等于最小值，设为0")
+                    if col_max > col_min:
+                        scaler = MinMaxScaler(feature_range=(0, 1))  # 可选-1，1
+                        scaler.fit(train_col)
+                        # 将拟合好的scaler存入字典，以列名为键
+                        self.scalers[col] = scaler
 
-        return self
+                        # 注意 1.transform要求的输入格式，2.转换完赋回去
+                        self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
+                        print(f"训练集列{col}:min_max 归一化完成")  # 1列Series(n,)->2D array(n,)。转换完用flatten()  压回1维(n,)
+                        if self.has_validation_set() and col in self.valSets.columns:
+                            self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
+                            print(f"验证集列{col}:min_max 归一化完成")
+                        if not self.testSets.empty and col in self.testSets.columns:
+                            self.testSets[col] = scaler.transform(self.testSets[col].values.reshape(-1, 1)).flatten()
+                            print(f"测试集列{col}:min_max 归一化完成")
 
-    def get_transformed_data(self) -> Tuple:
-        self.df = pd.concat([self.trainSets, self.valSets, self.testSets], ignore_index=False)
+                    else:  # 所有值相同的情况 self.train_col.max() == self.train_col.min():
+                        self.constant_values[col] = col_max
+                        self.trainSets[col] = 0.5
+                        if self.has_validation_set() and col in self.valSets.columns:
+                            self.valSets[col] = 0.5
+                        if not self.testSets.empty and col in self.testSets.columns:
+                            self.testSets[col] = 0.5
+                        print(f"列 '{col}': 最大值等于最小值，设为0.5")
+                        # 标记这个列不需要scaler
+                        self.scalers[col] = 'constant'
 
-        return self.df.copy(),self.trainSets.copy(), self.valSets.copy(), self.testSets.copy()
+                else:  # 数据不足
+                    print(f"列{col}:训练集数据不足，跳过归一化")
+                    self.scalers[col] = None
 
-    def get_scalers(self) -> dict:
-        return self.scalers.copy()
+            self.history.append("数值列归一化(minmax)")
+            return self
+
+    def get_history(self):
+        return self.history
+
+    def get_data(self):
+        return self.origin_df
+    def get_train_val_test_data(self):
+        if not self.trainSets.empty:
+            return self.trainSets.copy(),self.valSets.copy(),self.testSets.copy()
+        else:
+            print("切分数据集操作尚未执行")
+            return None
+
+    def save_scalers(self, filename: str = 'scalers.pkl'):
+        filepath = os.path.join(self.dir_path, filename)
+        joblib.dump(self.scalers, filepath)
+        print(f"Scalers saved to: {filepath}")
+        return filepath
