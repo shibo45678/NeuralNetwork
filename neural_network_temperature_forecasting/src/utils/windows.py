@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 from typing import Union, List, Optional, Any
@@ -21,6 +22,8 @@ class WindowGenerator:
         self.label_width = label_width  # label:5行
         self.shift = shift
         self.label_columns = label_columns
+        self.columns_indices =None # 列
+        self.dataset = None
 
         # 行
         self.total_window_size = input_width + shift  # 标签的起始[索引]为shift
@@ -41,31 +44,11 @@ class WindowGenerator:
 
     """切分窗口数据"""
 
-    @property
-    def createTrainSet(self, data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
-        return self.make_dataset(data)
 
-    @property
-    def createValSet(self,data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
-        return self.make_dataset(self.val_df)
-
-    @property
-    def createTestSet(self,data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
-        return self.make_dataset(self.test_df)
-
-
-    @property
-    def example(self) -> Any:
-        """缓存模式，避免每次调用都从数据集中获取样本，每次相同用例
-        """
-        result = getattr(self, '_example', None)  # 尝试获取 _example 属性
-        if result is None:
-            result = next(iter(self.createTrainSet))  # 从训练集中获取第一个样本
-            self._example = result  # 一对 inputs和labels
-        return result
-    # 列
-    self.columns_indices = {name: i for i, name in enumerate(train_df.columns)}  # 包含X和Y的所有列
-
+    def createDataset(self, data: Union[np.ndarray, pd.DataFrame]) -> tf.data.Dataset:
+        self.columns_indices = [{i:name} for i, name in enumerate(data.columns)]
+        self.dataset = self.make_dataset(data)
+        return  self.dataset
 
 
     def make_dataset(self, data: pd.DataFrame) -> tf.data.Dataset:
@@ -77,9 +60,9 @@ class WindowGenerator:
          """
         data = np.array(data, dtype=np.float32)
 
-        # 原始数据上操作，当设置batch_size=32时，数据集会将这些窗口组合成批次。
-        # 每个batch(批/桶/组）有32个样本 ： 49025行 = 1532批 * 32样本/批
-        # 每个样本是时间步length total_window_size的[sliding window]，每个元素是一个窗口（即一个样本）？
+        # 原始数据上操作，当设置batch_size=32时，原数据有多少样本？总样本 =（行总数-输入-shift-输出）+1
+        # 每个batch(批/桶/组）有32个样本 ： 总样本 / 每批32个样本 = 1532批
+        # 每个样本：（时间步length的输入 +  输出）组成 的[sliding window]
         ds = timeseries_dataset_from_array(
             data=data,
             targets=None,
@@ -93,13 +76,9 @@ class WindowGenerator:
 
         return ds
 
-
-
-
-
     def split_window(self, features) -> tuple[tf.Tensor, tf.Tensor]:
         """"""
-        """处理一个批次数据（包含 32 个样本/行），在32行上滑动窗口:
+        """处理一个批次数据（包含 32 个样本），在32横行上滑动窗口:
         features :三维张量[批大小, 时间步数, 特征数] 。特征数是包括"特征列(17) + 预测列(2:'T','p')
         labels: 标签张量，如果label_columns被指定，它只从labels中选择那些指定的列（否则就还是所有列）
         """
@@ -109,26 +88,27 @@ class WindowGenerator:
 
         # 匹配模型形状
         if self.label_columns is not None:
+            try:
+                labels = tf.stack(
+                    # 选择所有批次、所有时间步、但只有特定列的数据（在原labels张量，直接用索引进行特征列筛选： 19->2）
+                    # 子张量，每列的形状为[batch_size, label_width]（即去掉了特征维度）
+                    # tf.stack 对于每个时间步，T和p的值被组合在一起(从分开的列压缩到一个维度)，形成一个新的特征维度。不是melt效果数据变长.
+                    [labels[:, :, self.columns_indices[name]] for name in self.label_columns],
+                    axis=-1
+                )
+                print(f" stack后的labels 形状: {labels.shape}")
+                # 确保批处理大小和时间步数正确，但特征数允许变化（用None表示）
+                inputs.set_shape([None, self.input_width, None])
+                labels.set_shape([None, self.label_width, None])
 
-            labels = tf.stack(
-                # 选择所有批次、所有时间步、但只有特定列的数据（在原labels张量，直接用索引进行特征列筛选： 19->2）
-                # 子张量，每列的形状为[batch_size, label_width]（即去掉了特征维度）
-                # tf.stack 对于每个时间步，T和p的值被组合在一起(从分开的列压缩到一个维度)，形成一个新的特征维度。不是melt效果数据变长.
-                [labels[:, :, self.columns_indices[name]] for name in self.label_columns],
-                axis=-1
-            )
+                return inputs, labels
 
-            print(f" stack后的labels 形状: {labels.shape}")
-            # 确保批处理大小和时间步数正确，但特征数允许变化（用None表示）
-            inputs.set_shape([None, self.input_width, None])
-            labels.set_shape([None, self.label_width, None])
-
-            return inputs, labels
-
+            except Exception as e:
+                print(f"{str(e)}，可能窗口提供的列名不在数据集内")
 
 
     def window_plot(self, model=None, plot_col='T', max_subplots=3):
-        inputs, labels = self.example # 使用TensorFlow的迭代机制，才能正确解包inputs和label
+        inputs, labels = self.example  # 使用TensorFlow的迭代机制，才能正确解包inputs和label
         plot_col_index = self.columns_indices[plot_col]
         max_n = min(max_subplots, len(inputs))
 
@@ -161,3 +141,16 @@ class WindowGenerator:
 
         plt.xlabel('Time [h]')
         plt.show()
+
+    @property
+    def example(self) -> Any:
+        """缓存模式，避免每次调用都从数据集中获取样本，每次相同用例
+        """
+        result = getattr(self, '_example', None)  # 尝试获取 _example 属性
+        if result is None:
+            if self.dataset is not None:
+                result = next(iter(self.dataset))  # 从数据集中获取第一个样本
+                self._example = result  # 一对 inputs和labels
+            else:
+                raise ValueError('data not set,call createDataset() first')
+        return result

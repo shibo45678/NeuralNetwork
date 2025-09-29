@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 import datetime
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from ..data.exploration import Visualization
 import joblib
 
@@ -788,130 +788,207 @@ class DataPreprocessor:
 
     """数据标准化/归一化"""
 
-    def unify_feature_scaling(self, method: Dict = None, **kwargs) -> 'DataPreprocessor':  # 即zscore（原值-均值）/ 标准差
+    def unify_feature_scaling(self, transformers: List = None) -> 'DataPreprocessor':  # 即zscore（原值-均值）/ 标准差
         """统一标准化和归一化数值特征
-        Parameters
-        ----------
-        method : str, default 'standardize'
-            填写格式：
-            - {'name':'standardize' , 'threshold':3 } 标准化 (Z-score) - 均值0，标准差1
-            - {'name':'normalize'  } 归一化 - 缩放到 [0, 1] 范围 """
-        if method is None:
+        'minmax', {'feature_range': (0, 1), 'threshold': 1.5, 'columns': ['T']}
+                 归一化 (Normalization)	(x - min) / (max - min) scaler = MinMaxScaler(feature_range=(0, 1))  # 可选-1，1
+        'std_scaler':{'threshold':3,'columns':[]},
+                 标准化 zscore 3倍标准差 (x-mean)/std
+        'robust_scaler': {'quantile_range':(25, 75), 'columns':[]}
+                鲁棒 X_scaled = (X - median) / IQR
+        """
+        if transformers is None:
             print("统一数据格式但未提供方法")
             return self
 
-        df = self.origin_df.copy()
-        # 时间列不标准化：时间列 、 onehot分类列
-        time_cols = ['Day sin', 'Day cos', 'Year sin', 'Year cos']  # 时间特征列
-        cat_cols = [col for col in df.colomns if
-                    col.startwith('season_') or col.startswith('weather_')]  # 分类列
-        mask = ~np.isin(df.columns, time_cols + cat_cols)
-        numeric_scale_cols = df.colomns[mask].tolist()
+        self.scalers = {}  # 保存每个列独立的scaler
+        self.constant_values = {}  # 保存常数列的原始值
+        for method, config in transformers:
+            if method == 'minmax':
+                print("数据归一化(min_max)...")
+                # Min-Max 归一化（使用训练集统计量）
 
-        # Z_score标准化（使用训练集统计量）
-        if method['name'] == 'standardize':
-            print("数据标准化(zscore)...")
-            self.scalers = {}
-            self.constant_values = {}  # 保存常数列的原始值
+                for col in config['columns']:
+                    if self.trainSets[col].notna().sum() <= 1:  # 数据要求至少2个
+                        print(f"列{col}:训练集数据不足，跳过归一化")
+                        self.scalers[col] = None
 
-            for col in numeric_scale_cols:
+                    else:
+                        train_col = self.trainSets[col].dropna()
+                        col_max = train_col.max()
+                        col_min = train_col.min()
 
-                if self.trainSets[col].notna().sum() > 1:  # 至少2个非空
-                    train_col = self.trainSets[col].dropna()  # 自动处理
-                    col_mean = train_col.mean()  # 防止数据泄漏 只用训练集的均值和标准差
-                    col_std = train_col.std()
+                        if col_max == col_min:  # 所有值相同的情况
+                            self.trainSets[col] = 0.5
+                            self.constant_values[col] = col_max
 
-                    if col_std == 0:  # 处理零标准差情况
-                        self.constant_values[col] = col_mean
-                        print(f"列{col} 的均值为{col_mean}，标准差为0 ，设为常数0")
-                        self.trainSets[col] = 0  # 所有值相同，设为0
-                        if self.has_validation_set() and col in self.valSets.columns:
-                            self.valSets[col] = 0
-                        if not self.testSets.empty and col in self.testSets.columns:
-                            self.testSets[col] = 0
-                        self.scalers[col] = 'constant'
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = 0.5
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = 0.5
+                            print(f"列 '{col}': 最大值等于最小值，设为0.5")
+                            # 标记这个列不需要scaler
+                            self.scalers[col] = 'constant'
 
-                    else:  # std_z > 1e-8 避免除零错误
-                        scaler = StandardScaler()
-                        scaler.fit(train_col)
-                        self.scalers[col] = scaler
+                        else:
+                            # 定义： 只在训练集上拟合（计算参数）
+                            scaler = MinMaxScaler(feature_range=config['feature_range'])  # 可选-1，1
+                            scaler.fit(train_col)
+                            # 将拟合好的scaler存入字典，以列名为键
+                            self.scalers[col] = scaler
 
-                        self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
-                        print(f"训练集列{col}:z_score 标准化完成")
-                        if self.has_validation_set() and col in self.valSets.columns:
-                            self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
-                            print(f"验证集列{col}:z_score 标准化完成")
-                        if not self.testSets.empty and col in self.testSets.columns:
-                            self.testSets[col] = scaler.transform(self.testSets[col].values.reshape(-1, 1)).flatten()
-                            print(f"测试集列{col}:z_score 标准化完成")
-                        print(f"列 '{col}': 标准化完成 (均值: {col_mean:.2f}, 标准差: {col_std:.2f})")
+                            # 注意 1.transform要求的输入格式，2.转换完赋回去
+                            self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
+                            print(
+                                f"训练集列{col}:min_max 归一化完成")  # 1列Series(n,)->2D array(n,)。转换完用flatten()  压回1维(n,)
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
+                                print(f"验证集列{col}:min_max 归一化完成")
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = scaler.transform(
+                                    self.testSets[col].values.reshape(-1, 1)).flatten()
+                                print(f"测试集列{col}:min_max 归一化完成")
 
-                else:  # 数据不足
-                    print(f"列{col}:训练集数据不足，跳过标准化")
-                    self.scalers[col] = None
+                self.history.append("归一化min_max完成")
 
-            self.history.append("数值列标准化(zscore)")
-            return self
+            if method == 'std_scaler':
+                # zscore: （value-均值）/ 标准差 3 (dropna)
+                print("数据标准化(zscore)...")
 
-        # Min-Max 归一化（使用训练集统计量）
-        if method['name'] == 'normalize':
-            # 归一化 (Normalization)	(x - min) / (max - min)
-            # scaler = MinMaxScaler(feature_range=(0, 1))  # 可选-1，1
-            print("数据归一化(min_max)...")
+                for col in config['columns']:
+                    if self.trainSets[col].notna().sum() <= 1:  # 数据不足,至少2个非空
+                        print(f"列{col}:训练集数据不足，跳过标准化")
+                        self.scalers[col] = None
 
-            self.scalers = {}  # 保存每个列独立的scaler
-            self.constant_values = {}  # 保存常数列的原始值
+                    else:
+                        train_col = self.trainSets[col].dropna()  # 自动处理
+                        col_mean = train_col.mean()  # 防止数据泄漏 只用训练集的均值和标准差
+                        col_std = train_col.std()
 
-            for col in numeric_scale_cols:
+                        if col_std == 0:  # 处理零标准差情况
+                            self.constant_values[col] = col_mean
+                            print(f"列{col} 的均值为{col_mean}，标准差为0 ，设为常数0")
+                            self.trainSets[col] = 0  # 所有值相同，设为0
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = 0
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = 0
+                            self.scalers[col] = 'constant'
 
-                # 训练数据充足
-                if self.trainSets[col].notna().sum() > 1:
-                    train_col = self.trainSets[col].dropna()
-                    col_max = train_col.max()
-                    col_min = train_col.min()
+                        else:  # std_z > 1e-8 避免除零错误
+                            scaler = StandardScaler()
+                            scaler.fit(train_col)
+                            self.scalers[col] = scaler
 
-                    if col_max > col_min:
-                        scaler = MinMaxScaler(feature_range=(0, 1))  # 可选-1，1
-                        scaler.fit(train_col)
-                        # 将拟合好的scaler存入字典，以列名为键
-                        self.scalers[col] = scaler
+                            self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
+                            print(f"训练集列{col}:z_score 标准化完成")
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
+                                print(f"验证集列{col}:z_score 标准化完成")
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = scaler.transform(
+                                    self.testSets[col].values.reshape(-1, 1)).flatten()
+                                print(f"测试集列{col}:z_score 标准化完成")
+                            print(f"列 '{col}': 标准化完成 (均值: {col_mean:.2f}, 标准差: {col_std:.2f})")
 
-                        # 注意 1.transform要求的输入格式，2.转换完赋回去
-                        self.trainSets[col] = scaler.transform(self.trainSets[col].values.reshape(-1, 1)).flatten()
-                        print(f"训练集列{col}:min_max 归一化完成")  # 1列Series(n,)->2D array(n,)。转换完用flatten()  压回1维(n,)
-                        if self.has_validation_set() and col in self.valSets.columns:
-                            self.valSets[col] = scaler.transform(self.valSets[col].values.reshape(-1, 1)).flatten()
-                            print(f"验证集列{col}:min_max 归一化完成")
-                        if not self.testSets.empty and col in self.testSets.columns:
-                            self.testSets[col] = scaler.transform(self.testSets[col].values.reshape(-1, 1)).flatten()
-                            print(f"测试集列{col}:min_max 归一化完成")
+                self.history.append("数值列标准化(zscore)")
 
-                    else:  # 所有值相同的情况 self.train_col.max() == self.train_col.min():
-                        self.constant_values[col] = col_max
-                        self.trainSets[col] = 0.5
-                        if self.has_validation_set() and col in self.valSets.columns:
-                            self.valSets[col] = 0.5
-                        if not self.testSets.empty and col in self.testSets.columns:
-                            self.testSets[col] = 0.5
-                        print(f"列 '{col}': 最大值等于最小值，设为0.5")
-                        # 标记这个列不需要scaler
-                        self.scalers[col] = 'constant'
+            if method == 'robust_scaler':
+                print("数据鲁棒标准化(robust)...")
 
-                else:  # 数据不足
-                    print(f"列{col}:训练集数据不足，跳过归一化")
-                    self.scalers[col] = None
+                for col in config['columns']:
+                    train_non_null = self.trainSets[col].dropna()
+                    n_samples = len(train_non_null)
 
-            self.history.append("数值列归一化(minmax)")
-            return self
+                    # 样本数 ≤ 1
+                    if n_samples <= 1:  # 数据要求至少2个
+                        print(f"列{col}:训练集数据不足（{n_samples}个样本），跳过标准化")
+                        self.scalers[col] = None
+                        continue
+
+                    # 样本数 2-4，四分位数计算不稳定(分为:值相同 + 值不同的情况)
+                    elif n_samples <= 4:  # 处理：使用 中位数和标准差 替代 中位数和IQR 公式：(X - median) / std
+                        print(f"列{col}:样本数较少({n_samples}个)，使用中位数和标准差代替 IQR")
+                        col_median = train_non_null.median()
+                        col_std = train_non_null.std()
+
+                        if col_std == 0:  # 所有值相同的情况:标准差为0，设为0，记录中位数
+                            self.trainSets[col] = 0
+                            self.constant_values[col] = col_median
+
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col]=0
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col]=0
+                            print(f"列 '{col}': 标准差为0，设为0")
+                            self.scalers[col] = 'constant'
+                        else:# 值不相同的情况，手动实现基于标准差的鲁棒缩放
+                            self.trainSets[col] =(self.trainSets[col] - col_median) /  col_std
+                            print(f"训练集{col}：使用中位数和标准差进行鲁棒标准化")
+
+                            # 保存scaler信息供验证集和测试集使用
+                            self.scalers[col] = {
+                                'type':'manual_robust',
+                                'median':col_median,
+                                'scale':col_std
+                            }
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = (self.valSets[col]-col_median)/col_std
+                                print(f"验证集列{col}：使用中位数和标准差进行鲁棒标准化")
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = (self.testSets[col]-col_median) / col_std
+                                print(f"测试集列{col}：使用中位数和标准差进行鲁棒标准化")
+
+                    else: # 数据足够（有一个特殊IQR=0）
+                        q1 = train_non_null.quantile(0.25)
+                        q3 =train_non_null.quantile(0.75)
+                        iqr = q3-q1
+
+                        if iqr ==0:#原公式分母为0
+                            self.trainSets[col]=0
+                            self.constant_values[col]=train_non_null.median()
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col]=0
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col]=0
+                            print(f"列 '{col}': IQR为0，设为0")
+                            self.scalers[col] = 'constant'
+                        else:
+                            scaler = RobustScaler(
+                                with_centering=True, # 减去中位数
+                                with_scaling = True, # 除以IQR
+                                quantile_range=(25,75) # scikit-learn 使用百分比形式
+                            )
+                            scaler.fit(train_non_null.values.reshape(-1,1))
+                            self.scalers[col] =scaler
+                            self.trainSets[col]=scaler.transform(self.trainSets[col].values.reshape(-1,1)).flatten()
+                            print(f"训练集列{col}: robust标准化完成 (median={scaler.center_[0]:.3f}, IQR={1 / scaler.scale_[0]:.3f})")
+                            # 转换验证集和测试集
+                            if self.has_validation_set() and col in self.valSets.columns:
+                                self.valSets[col] = scaler.transform(
+                                    self.valSets[col].values.reshape(-1, 1)
+                                ).flatten()
+                                print(f"验证集列{col}: robust标准化完成")
+
+                            if not self.testSets.empty and col in self.testSets.columns:
+                                self.testSets[col] = scaler.transform(
+                                    self.testSets[col].values.reshape(-1, 1)
+                                ).flatten()
+                                print(f"测试集列{col}: robust标准化完成")
+
+                self.history.append("鲁棒标准化robust完成")
+
+
 
     def get_history(self):
         return self.history
 
     def get_data(self):
         return self.origin_df
+
     def get_train_val_test_data(self):
         if not self.trainSets.empty:
-            return self.trainSets.copy(),self.valSets.copy(),self.testSets.copy()
+            return self.trainSets.copy(), self.valSets.copy(), self.testSets.copy()
         else:
             print("切分数据集操作尚未执行")
             return None
@@ -921,3 +998,9 @@ class DataPreprocessor:
         joblib.dump(self.scalers, filepath)
         print(f"Scalers saved to: {filepath}")
         return filepath
+    def save_constant_values(self,filename:str='constant.pkl'):
+        filepath =os.path.join(self.dir_path,filename)
+        joblib.dump(self.constant_values,filepath)
+        print(f"constant_values saved to: {filepath}")
+        return filepath
+

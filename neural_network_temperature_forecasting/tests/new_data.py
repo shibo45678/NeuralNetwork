@@ -22,4 +22,4 @@ preprocessor  = (DataPreprocessor(input_files = ["data_climate.csv"])
                         .handle_time_col(col='Date Time',format='%d.%m.%Y %H:%M:%S') # time_col正余弦
                         .handle_vec_col(dir_cols=['wd'],var_cols=['wv','max. wv']) # vec_col 风矢量 要求顺序
                         )
-preprocessor.get_data()
+new_data = preprocessor.get_data()

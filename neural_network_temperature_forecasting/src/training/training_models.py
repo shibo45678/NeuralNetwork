@@ -7,15 +7,16 @@ import tensorflow as tf
 
 def TrainingModel(model_name:str,
                 model,  # tf.keras.models
-                window,  # 'WindowGenerator'
+                trainset,
+                valset,
                 epochs: int = 20, # 总轮数
                 verbose: int = 2):
 
     weights_path = f"best_model_{model_name}_weights.h5"
 
     record = model.fit(
-        window.createTrainSet,  # x,y
-        validation_data=window.createValSet,
+        trainset,  # x,y
+        valset,
         epochs=epochs,
         verbose=verbose,  # 设置日志显示，0为不在标准输出流输出日志信息，1为输出进度条记录 2 epoch每轮输出一行记录
         callbacks=[

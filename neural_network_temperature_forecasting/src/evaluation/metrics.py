@@ -8,7 +8,10 @@ from typing import Union
 # history.history 包含的是训练时的指标名称（包括验证集指标）
 def evaluate_model(name: str,
                    model: Union['CnnModel', 'LstmModel'],
-                   window: 'WindowGenerator'):
+                   window: 'WindowGenerator',
+                   valsets,
+                   testsets,
+                   ):
 
     window.window_plot(model)
     plt.show()
@@ -17,8 +20,8 @@ def evaluate_model(name: str,
 
     """MAE"""
     # 用验证集、测试集评估模型，并返回验证集评估结果（损失值和MAE）evaluate
-    val_performance = model.evaluate(window.createValSet, verbose=0)
-    test_performance = model.evaluate(window.createTestSet, verbose=0)
+    val_performance = model.evaluate(valsets, verbose=0)
+    test_performance = model.evaluate(testsets, verbose=0)
 
     print(f"验证集评估结果：{dict(zip(model.metrics_names,val_performance))}")
     print(f"测试集评估结果：{dict(zip(model.metrics_names,test_performance))}")
