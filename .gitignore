@@ -73,3 +73,6 @@ trained_models/
 test.html
 test.js
 SQL/SQL.py
+debug_sessions/
+*.pkl
+*.txt
