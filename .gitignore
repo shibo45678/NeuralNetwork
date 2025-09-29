@@ -76,3 +76,9 @@ SQL/SQL.py
 debug_sessions/
 *.pkl
 *.txt
+debug/
+*.pickle
+*.h5
+*.hdf5
+*.model
+*.pth
