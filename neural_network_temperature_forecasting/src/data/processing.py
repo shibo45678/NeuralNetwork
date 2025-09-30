@@ -5,7 +5,7 @@ import codecs
 import os
 import csv
 import glob
-from typing import Dict, List
+from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -17,14 +17,8 @@ import joblib
 
 class DataPreprocessor:
     def __init__(self, input_files: list):
-        PROJECT_ROOT = Path(__file__).parent.parent.parent
-        self.dir_path = PROJECT_ROOT / "data"
-        self.input_files = input_files
-        self.merged_df = pd.DataFrame()
-        self.origin_df = self.merged_df.copy()
-        self.numeric_columns = None
-        self.categorical_columns = None
-        self.other_columns = None
+
+
         self.trainSets = pd.DataFrame()
         self.valSets = pd.DataFrame()
         self.testSets = pd.DataFrame()
@@ -45,7 +39,7 @@ class DataLoader(BaseEstimator, TransformerMixin):
         self.merged_df = None
         self.history = []
 
-    """初始化设置"""
+
 
     def fit(self, X=None, y=None) -> 'DataLoader':
         PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -175,14 +169,16 @@ class DescribeData(BaseEstimator, TransformerMixin):
 
 
 """一般问题列正则处理"""
+
+
 class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
-    print("一般问题列正则处理...")
 
     def __init__(self, problem_columns: list = None):
         self.problem_columns = problem_columns
         self.columns_to_process_ = []
 
     def fit(self, X, y=None):
+        print("一般问题列正则处理...")
         """验证问题列是否存在"""
         df = pd.DataFrame(X)
         if self.problem_columns is None:
@@ -216,29 +212,31 @@ class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
 
                     df[col] = (df[col]
                     .astype(str)
-                    .str.extract(r'([-+]?\d*\.?\d+)',expand=False)[0]) # expand=False 返回Series
+                    .str.extract(r'([-+]?\d*\.?\d+)', expand=False)[0])  # expand=False 返回Series
 
                     df[col] = pd.to_numeric(df[col], errors='coerce')
-                    processed_count +=1
+                    processed_count += 1
                     print(f"列 '{col}':已转文本，正则清洗，转回数值")
         print(f"正则清洗完成: 成功处理 {processed_count}/{len(self.columns_to_process_)} 个列")
-        return  df
-
+        return df
 
 
 """修复问题列-列包含df"""
-class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
-    def __init__(self,problem_columns: list = None):
+
+
+class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
+    def __init__(self, problem_columns: list = None):
         self.problem_columns = problem_columns
-        self.columns_to_process_=[]
-    def fit(self,X,y=None):
+        self.columns_to_process_ = []
+
+    def fit(self, X, y=None):
         if self.problem_columns is None:
             print("使用'特别修复'列功能，但未指定待修复问题列")
             return self
 
         df = pd.DataFrame(X)
 
-        missing_cols =[col for col in self.problem_columns if col not in df.columns]
+        missing_cols = [col for col in self.problem_columns if col not in df.columns]
         if missing_cols:
             print(f"以下列不存在，将跳过: {missing_cols}")
 
@@ -264,9 +262,9 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
                 if isinstance(first_non_null, pd.DataFrame):
                     print(f"确认{col}列包含DataFrame对象，第一个元素形状：{first_non_null.shape}")
                     needs_processing = True
-                    skip_further_checks =True # 标记跳过后续检查
+                    skip_further_checks = True  # 标记跳过后续检查
 
-                elif first_non_null is not None  and hasattr(first_non_null,'iloc'):
+                elif first_non_null is not None and hasattr(first_non_null, 'iloc'):
                     print(f"列 '{col}' 第一个值有iloc方法，可能是特殊对象")
                     needs_processing = True
                     skip_further_checks = True
@@ -280,9 +278,10 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
                     except Exception as e:
                         print(f"无法访问内部值: {e}")
 
-                if not skip_further_checks: # 第一个值检查完，检查整列是否有DataFrame
+                if not skip_further_checks:  # 第一个值检查完，检查整列是否有DataFrame
                     try:
-                        has_other_dataframe =any(isinstance(inner_value, pd.DataFrame) for inner_value in series if pd.notna(inner_value))
+                        has_other_dataframe = any(
+                            isinstance(inner_value, pd.DataFrame) for inner_value in series if pd.notna(inner_value))
                         if has_other_dataframe:
                             print(f"{col}列中有其他单元格包含DataFrame对象")
                             needs_processing = True
@@ -294,20 +293,19 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
                     self.columns_to_process_.append(col)
                     print(f"添加列 '{col}' 到处理列表")
 
-
         print(f"将处理 {len(self.columns_to_process_)} 个问题列: {self.columns_to_process_}")
 
         return self
 
-    def transform(self,X):
+    def transform(self, X):
         print("开始修改问题列...")
         if not self.columns_to_process_:
             print("没有需要修复的列")
             return X
 
-        df = pd.DataFrame(X).copy() if not isinstance(X,pd.DataFrame) else X.copy()
+        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
 
-        for col in self.columns_to_process_:# fit判断过，但可能单独调transform
+        for col in self.columns_to_process_:  # fit判断过，但可能单独调transform
             if col not in df.columns:
                 print(f"列 '{col}' 不存在于数据中，跳过")
                 continue
@@ -318,7 +316,7 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
             extracted_values = []
             for i, inner_value in enumerate(series):
                 if pd.isna(inner_value):
-                     # 保持NaN值
+                    # 保持NaN值
                     extracted_values.append(np.nan)
 
                 elif isinstance(inner_value, pd.DataFrame) and not inner_value.empty:
@@ -326,7 +324,7 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
                     try:
                         if inner_value.shape[1] > 0:
                             extracted_values = inner_value.iloc[0, 0]
-                        else :
+                        else:
                             extracted_values = inner_value.iloc[0]
                         extracted_values.append(extracted_values)
                         print(f"索引 {i}: DataFrame -> {extracted_values}")
@@ -344,10 +342,9 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
             df[col] = series_fixed
 
             # 验证修复结果
-            if len(df[col])>0:
+            if len(df[col]) > 0:
                 sample_value = df[col].iloc[0]
                 print(f"修复后的{col}列类型: {type(sample_value)},值: {sample_value}")
-
 
             """检查原Series是否在某些操作下表现出DataFrame行为"""
             print("\n=== 行为测试 ===")
@@ -373,28 +370,144 @@ class SpecialColumnsFixed(BaseEstimator,TransformerMixin):
         return df
 
 
-
 """识别列类型"""
-class
-def identify_column_types(self):
-    df = self.origin_df.copy()
-    """识别列类型..."""
-    # 数值型列(整型/浮点型）
-    self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
-    # 分类型列(字符串/分类）
-    self.categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
-    # 其他类型(日期/布尔等) 临时变量，不需要后续方法中频繁使用
-    self.other_columns = df.select_dtypes(exclude=[np.number, 'object', 'category']).columns.tolist()
 
-    print(f"数值型{len(self.numeric_columns)}列: {self.numeric_columns}")
-    print(f"分类/字符串型{len(self.categorical_columns)}列: {self.categorical_columns}")
-    print(f"其他类型{len(self.other_columns)}列: {self.other_columns}")
 
-    self.history.append('识别类型')
-    return self
+class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        self.numeric_columns = None
+        self.categorical_columns = None
+        self.other_columns = None
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        # 数值型列(整型/浮点型）
+        self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+        # 分类型列(字符串/分类）
+        self.categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
+        # 其他类型(日期/布尔等) 临时变量，不需要后续方法中频繁使用
+        self.other_columns = df.select_dtypes(exclude=[np.number, 'object', 'category']).columns.tolist()
+
+        print(f"数值型{len(self.numeric_columns)}列: {self.numeric_columns}")
+        print(f"分类/字符串型{len(self.categorical_columns)}列: {self.categorical_columns}")
+        print(f"其他类型{len(self.other_columns)}列: {self.other_columns}")
+
+        return self
+
+    def transform(self, X):
+        return X
 
 
 """处理数值型数据"""
+
+
+class ProcessNumericColumns(BaseEstimator, TransformerMixin):
+    def __init__(self, cols: Optional[list] = None,preserve_integer_types:bool=True):
+        self.numeric_columns = cols
+        # object(字符串/混合类型，里面'1', '2', 'abc'] -> [1.0, 2.0, nan]) 默认是float64 -> 改为 [1, 2, nan]
+        # 其他数值型不变 int64，float64
+        self.preserve_integer_types=preserve_integer_types
+        self.original_dtypes_ ={}
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        if self.numeric_columns is None:  # None ，空列表[]
+            print("未指定待处理数值列，检查数据全部数值列")
+            self.numeric_columns = df.select_dtypes(include=[np.number]).columns.to_list()
+            if not self.numeric_columns:
+                print("数据无数值列需处理")
+            else:
+                print(f"自动识别数值列: {self.numeric_columns}")
+        else:
+            # 检查指定的列是否实际存在
+            existing_cols = [col for col in self.numeric_columns if col in df.columns]
+            missing_cols = [col for col in self.numeric_columns if col not in df.columns]
+
+            if missing_cols:
+                print(f"警告: 以下指定列不存在: {missing_cols}")
+
+            self.numeric_columns = existing_cols
+            print(f"使用指定数值列: {self.numeric_columns}")
+
+            # 记录原始数据类型
+            for col in self.numeric_columns:
+                if col in df.columns:
+                    self.original_dtypes_[col] = df[col].dtype
+
+        return self
+
+    def transform(self, X):
+        print("处理数值型数据...")
+        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+
+        if not self.numeric_columns:
+            print("无数值列需要处理")
+            return df
+
+        for col in self.numeric_columns:
+            if col in df.columns:
+                # 保存原类型
+                original_dtype = df[col].dtypes
+
+                df[col] = pd.to_numeric(df[col], errors='coerce')  # object 不报错，转NaN 默认是float64。
+
+                # 如果标记为保持整数类型、原始是整数类型、转换后没有小数部分，尝试转回整数
+                if (self.preserve_integer_types and
+                        col in self.original_dtypes_ and
+                        np.issubdtype(self.original_dtypes_[col], np.integer)):
+
+                    # 检查是否所有非空值都是整数
+                    non_null_values = df[col].dropna()
+                    if len(non_null_values) > 0:
+                        # 方法：直接检查小数部分是否为0 .00
+                        decimal_parts = non_null_values % 1
+                        all_integers = np.all(decimal_parts == 0) # bool
+                        if all_integers:
+                            df[col] = df[col].astype('Int64')
+                print(f"列 {col} 已确认是数值型 (原类型: {original_dtype} -> 现类型: {df[col].dtype})")
+            else:
+                print(f"列{col}不在数据中")
+                continue
+
+        print("数值型数据处理完成")
+        return df
+
+    """处理分类型/字符串数据"""
+
+    def encode_categorical_data(self):
+        """处理分类型/字符串数据"""
+        print("处理分类型/字符串数据...")
+        if self.categorical_columns in None:
+            print("无分类型/字符串型列不需要处理")
+            return self
+        else:
+            for col in self.categorical_columns:
+                if col == 'Date Time':
+                    # 处理字符串时间 并排好序
+                    datetime = pd.to_datetime(self.origin_df.pop(col), format='%d.%m.%Y %H:%M:%S')
+                    self.origin_df[col] = datetime
+                    self.origin_df = self.origin_df.sort_values(col, ascending=True)
+                    print(f"已处理时间字符串列{col}，转成datetime格式")
+
+                # 处理分类
+                # 1.分类数量少，星期几月(独热编码)
+                # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
+                # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
+            self.history.append('处理分类型/字符串数据')
+            return self
+
+    """处理其他型(时间/布尔)数据"""
+
+    def process_other_data(self):
+        print("处理其他型(时间/布尔)数据...")
+        if self.other_columns is None:
+            print("无其他型(时间/布尔)不需要处理")
+            return self
+        else:
+            other_df = self.origin_df[self.other_columns]
+            self.history.append('处理其他型(时间/布尔)数据')
+
+        return self
 
 
 def process_numeric_data(self):

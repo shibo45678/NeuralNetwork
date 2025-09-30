@@ -1,4 +1,5 @@
-from src.data.processing import DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed
+from src.data.processing import (DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed,
+                                 ColumnsTypeIdentify,ProcessNumericColumns)
 from src.data.exploration import Visualization
 from src.utils.windows import WindowGenerator
 from src.models.cnn import CnnModel
@@ -51,6 +52,9 @@ def main():
             ('describing',DescribeData()),
             ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
             ('special_fixer',SpecialColumnsFixed(problem_columns=['T'])),
+            ('identify_columns_type',ColumnsTypeIdentify()),
+            ('numeric_cols',ProcessNumericColumns(preserve_integer_types=True))
+
         ])
         # 执行pipeline
         processed_data = full_pipeline.fit_transform()
