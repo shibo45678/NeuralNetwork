@@ -1,4 +1,4 @@
-from src.data.processing import DataPreprocessor  # 类使用绝对路径
+from src.data.processing import DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed
 from src.data.exploration import Visualization
 from src.utils.windows import WindowGenerator
 from src.models.cnn import CnnModel
@@ -13,7 +13,7 @@ from src.utils.debug_controller import DebugController
 import os
 import sys
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
-
+from sklearn.pipeline import Pipeline
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 
@@ -45,17 +45,19 @@ def main():
         print("=== 重新执行 data_preparation 阶段 ===")
         print("包括：清洗数据 + 划分数据集 + 构建窗口数据...")
         # STAGE_START:after_data_preparation
-        config= [
-            ('minmax', {'feature_range': (0, 1), 'columns': ['T']}),
-            # ('std_scaler', {'columns': []}),
-            # ('robust_scaler', {'quantile_range': (25, 75), 'columns': []})
-        ]
+
+        full_pipeline =Pipeline([
+            ('encode_loading',DataLoader(input_files=["data_climate.csv",],pattern = "new_*.csv",data_dir ="data")),
+            ('describing',DescribeData()),
+            ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
+            ('special_fixer',SpecialColumnsFixed(problem_columns=['T'])),
+        ])
+        # 执行pipeline
+        processed_data = full_pipeline.fit_transform()
+
+
         preprocessor = (DataPreprocessor(input_files=["data_climate.csv"])
-        .handleEncoding()  # 编码utf-8
-        .load_all_data(pattern="new_*.csv")
-        .describe_data()
-        .problem_columns_fixed(problem_columns=[])
-        .special_columns_fixed(problem_columns=['T'])
+
         .identify_column_types()
         .process_numeric_data()
         .encode_categorical_data()
@@ -72,7 +74,11 @@ def main():
         .handle_vec_col(dir_cols=['wd'], var_cols=['wv', 'max. wv'])  # vec_col 风矢量 要求顺序
         .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
         .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
-
+        config= [
+            ('minmax', {'feature_range': (0, 1), 'columns': ['T']}),
+            # ('std_scaler', {'columns': []}),
+            # ('robust_scaler', {'quantile_range': (25, 75), 'columns': []})
+        ]
         # 保存预处理结束时的scalar配置
         scalers_path = preprocessor.save_scalers(filename='scalers.pkl')
         constant_path = preprocessor.save_constant_values(filename='constant.pkl')
