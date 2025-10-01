@@ -17,8 +17,6 @@ import joblib
 
 class DataPreprocessor:
     def __init__(self, input_files: list):
-
-
         self.trainSets = pd.DataFrame()
         self.valSets = pd.DataFrame()
         self.testSets = pd.DataFrame()
@@ -38,8 +36,6 @@ class DataLoader(BaseEstimator, TransformerMixin):
         self.dir_path = None
         self.merged_df = None
         self.history = []
-
-
 
     def fit(self, X=None, y=None) -> 'DataLoader':
         PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -402,12 +398,12 @@ class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
 
 
 class ProcessNumericColumns(BaseEstimator, TransformerMixin):
-    def __init__(self, cols: Optional[list] = None,preserve_integer_types:bool=True):
+    def __init__(self, cols: Optional[list] = None, preserve_integer_types: bool = True):
         self.numeric_columns = cols
         # object(字符串/混合类型，里面'1', '2', 'abc'] -> [1.0, 2.0, nan]) 默认是float64 -> 改为 [1, 2, nan]
         # 其他数值型不变 int64，float64
-        self.preserve_integer_types=preserve_integer_types
-        self.original_dtypes_ ={}
+        self.preserve_integer_types = preserve_integer_types
+        self.original_dtypes_ = {}
 
     def fit(self, X, y=None):
         df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
@@ -447,7 +443,7 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         for col in self.numeric_columns:
             if col in df.columns:
                 # 保存原类型
-                original_dtype = df[col].dtypes
+                original_dtype = df[col].dtype
 
                 df[col] = pd.to_numeric(df[col], errors='coerce')  # object 不报错，转NaN 默认是float64。
 
@@ -461,7 +457,7 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
                     if len(non_null_values) > 0:
                         # 方法：直接检查小数部分是否为0 .00
                         decimal_parts = non_null_values % 1
-                        all_integers = np.all(decimal_parts == 0) # bool
+                        all_integers = np.all(decimal_parts == 0)  # bool
                         if all_integers:
                             df[col] = df[col].astype('Int64')
                 print(f"列 {col} 已确认是数值型 (原类型: {original_dtype} -> 现类型: {df[col].dtype})")
@@ -472,71 +468,25 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         print("数值型数据处理完成")
         return df
 
-    """处理分类型/字符串数据"""
-
-    def encode_categorical_data(self):
-        """处理分类型/字符串数据"""
-        print("处理分类型/字符串数据...")
-        if self.categorical_columns in None:
-            print("无分类型/字符串型列不需要处理")
-            return self
-        else:
-            for col in self.categorical_columns:
-                if col == 'Date Time':
-                    # 处理字符串时间 并排好序
-                    datetime = pd.to_datetime(self.origin_df.pop(col), format='%d.%m.%Y %H:%M:%S')
-                    self.origin_df[col] = datetime
-                    self.origin_df = self.origin_df.sort_values(col, ascending=True)
-                    print(f"已处理时间字符串列{col}，转成datetime格式")
-
-                # 处理分类
-                # 1.分类数量少，星期几月(独热编码)
-                # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
-                # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
-            self.history.append('处理分类型/字符串数据')
-            return self
-
-    """处理其他型(时间/布尔)数据"""
-
-    def process_other_data(self):
-        print("处理其他型(时间/布尔)数据...")
-        if self.other_columns is None:
-            print("无其他型(时间/布尔)不需要处理")
-            return self
-        else:
-            other_df = self.origin_df[self.other_columns]
-            self.history.append('处理其他型(时间/布尔)数据')
-
-        return self
-
-
-def process_numeric_data(self):
-    """处理数值型数据"""
-    print("处理数值型数据...")
-    if self.numeric_columns in None:
-        print("无数值列不需要处理")
-        return self
-    else:
-        # 确认是数值型
-        for col in self.numeric_columns:
-            self.origin_df[col] = pd.to_numeric(self.origin_df[col],
-                                                errors='coerce')  # 不报错，转NaN ，转整型 .astype('int64')
-        print("数值列已确认是数值型")
-        self.history.append('处理数值型数据')
-
-    return self
-
 
 """处理分类型/字符串数据"""
 
 
-def encode_categorical_data(self):
-    """处理分类型/字符串数据"""
-    print("处理分类型/字符串数据...")
-    if self.categorical_columns in None:
-        print("无分类型/字符串型列不需要处理")
+class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
+    def __init__(self, cols):
+        self.categorical_columns = cols
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X,paaD)
+
+        if self.categorical_columns in None:
+            print("无分类型/字符串型列不需要处理")
+            return self
+
         return self
-    else:
+
+    def transform(self, X):
+        print("处理分类型/字符串数据...")
         for col in self.categorical_columns:
             if col == 'Date Time':
                 # 处理字符串时间 并排好序
@@ -549,8 +499,7 @@ def encode_categorical_data(self):
             # 1.分类数量少，星期几月(独热编码)
             # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
             # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
-        self.history.append('处理分类型/字符串数据')
-        return self
+        return X
 
 
 """处理其他型(时间/布尔)数据"""
