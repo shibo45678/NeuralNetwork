@@ -1,5 +1,4 @@
 from sklearn.base import BaseEstimator, TransformerMixin
-
 from pathlib import Path
 import codecs
 import os
@@ -11,7 +10,7 @@ import numpy as np
 from scipy import stats
 import datetime
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
-from ..data.exploration import Visualization
+from data.exploration import Visualization
 import joblib
 
 
@@ -201,7 +200,7 @@ class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
         for col in self.columns_to_process_:
             if col in df.columns:
                 # 记录处理前信息
-                non_null_count = df[col].notna().sum()
+                non_null_count: int = df[col].notna().sum()
                 if non_null_count > 0:
                     sample_value = df[col].iloc[0]
                     print(f"问题列第一个元素：{sample_value}")
@@ -394,7 +393,7 @@ class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
         return X
 
 
-"""处理数值型数据"""
+"""处理数值型数据"""  # 可以将时间生成的sin cos 除掉 'timedelta' 'days_since_start' 'year_since_start'
 
 
 class ProcessNumericColumns(BaseEstimator, TransformerMixin):
@@ -408,8 +407,8 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
         if self.numeric_columns is None:  # None ，空列表[]
-            print("未指定待处理数值列，检查数据全部数值列")
-            self.numeric_columns = df.select_dtypes(include=[np.number]).columns.to_list()
+            print("未指定待处理数值列，检查原数据的全部数值列...")
+            self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
             if not self.numeric_columns:
                 print("数据无数值列需处理")
             else:
@@ -434,12 +433,11 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         print("处理数值型数据...")
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
-
         if not self.numeric_columns:
             print("无数值列需要处理")
-            return df
+            return X
 
+        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
         for col in self.numeric_columns:
             if col in df.columns:
                 # 保存原类型
@@ -469,52 +467,331 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         return df
 
 
-"""处理分类型/字符串数据"""
+"""处理分类型/字符串数据"""  # 提前将日期生成的分类列进行astype
 
 
 class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
-    def __init__(self, cols):
+    def __init__(self, cols: Optional[list] = None, onehot_threshold: int = 10):
         self.categorical_columns = cols
+        self.onehot_threshold = onehot_threshold  # 独热编码的最大类别数阈值
+        self.onehot_columns_ = []  # 记录哪些列使用了独热编码
 
     def fit(self, X, y=None):
-        df = pd.DataFrame(X) if not isinstance(X,paaD)
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        if self.categorical_columns is None:
+            print("未指定待处理字符串/分类列，检查原数据的全部字符串/分类列...")
+            self.categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            if not self.categorical_columns:
+                print("数据无分类型/字符串型列需处理")
+            else:
+                print(f"自动识别分类型/字符串型列:{self.categorical_columns}")
 
-        if self.categorical_columns in None:
-            print("无分类型/字符串型列不需要处理")
-            return self
+        else:
+            existing_cols = [col for col in self.categorical_columns if col in df.columns]
+            missing_cols = [col for col in self.categorical_columns if col not in df.columns]
+            if missing_cols:
+                print(f"警告: 以下指定列不存在:{missing_cols}")
+            self.categorical_columns = existing_cols
+            print(f"使用指定列: {self.categorical_columns}")
 
+        # 确定哪些列使用独热编码
+        for col in self.categorical_columns:
+            if col != 'Date Time':  # 时间列不参与独热编码
+                unique_count = df[col].nunique()  # Excludes NA values by default.
+                if unique_count <= self.onehot_threshold:
+                    self.onehot_columns_.append(col)
+                    print(f"列 '{col}' 将使用独热编码 (唯一值数量: {unique_count})")
         return self
 
     def transform(self, X):
         print("处理分类型/字符串数据...")
-        for col in self.categorical_columns:
-            if col == 'Date Time':
-                # 处理字符串时间 并排好序
-                datetime = pd.to_datetime(self.origin_df.pop(col), format='%d.%m.%Y %H:%M:%S')
-                self.origin_df[col] = datetime
-                self.origin_df = self.origin_df.sort_values(col, ascending=True)
-                print(f"已处理时间字符串列{col}，转成datetime格式")
 
-            # 处理分类
-            # 1.分类数量少，星期几月(独热编码)
-            # 2.分类数量多，产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
-            # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
+        if self.categorical_columns is None:
+            print("无分类型/字符串列需处理")
+            return X
+
+        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+
+        for col in self.categorical_columns:
+            # 处理字符串类型的时间分列
+            if col == 'Date Time':
+                # object 转 datetime
+                df = self._strptime(df, col)
+            if col in self.onehot_columns_:
+                df = self._onehot(df, col)
+
+        return df
+
+    def _strptime(self, df, col):
+        # 处理字符串时间 并排好序
+        datetime = pd.to_datetime(df.pop(col), format='%d.%m.%Y %H:%M:%S')
+        df[col] = datetime
+        df = df.sort_values(col, ascending=True)
+        print(f"已处理时间字符串列{col}，转成datetime格式")
+        return df
+
+    def _onehot(self, df, col):
+        # 处理分类
+        # 1.分类数量少，四季(独热编码)
+        # 2.分类数量多，电商的产品ID、店铺ID，模型内嵌入层 (Embedding Layer)，将高基数分类特征转换为密集向量表示
+        # 即使输入已经处理，如果是预测分类变量，也要处理输出层激活函数以及损失函数。而且layers也是需要分开卷积再合并！
+
+        try:
+            encoded_df = pd.get_dummies(df[col], prefix=col)
+            # 删除原始列
+            df = df.drop(col, axis=1)
+
+            # 合并编码后的列
+            df = pd.concat([df, encoded_df], axis=1)
+            print(f"列 '{col}' 独热编码完成，新增 {len(encoded_df.columns)} 个特征")
+
+        except Exception as e:
+            print(f"列 '{col}' 独热编码失败: {str(e)}")
+
+        return df
+
+
+"""处理特殊数据(向量）"""
+
+
+class ProcessOtherColumns(BaseEstimator, TransformerMixin):
+    def __init__(self, dir_cols:Optional[list]=None, var_cols:Optional[list]=None):
+        self.dir_cols = dir_cols
+        self.var_cols = var_cols
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+
+        if np.any(self.dir_cols ,self.var_cols) is None:
+            print("未指定待处理vector列，方向 dir_cols 、速度 var_cols 不可为空...")
+        else:
+            existing_dir = [col for col in self.dir_cols if col in df.columns]
+            missing_dir = [col for col in self.dir_cols if col not in df.columns]
+            if missing_dir:
+                print(f"警告：指定 dir_cols 列不存在：{missing_dir}")
+            if existing_dir :
+            self.dir_cols = existing_dir
+
+            existing_var = [col for col in self.var_cols if col in df.columns]
+            missing_var = [col for col in self.var_cols if col not in df.columns]
+            if existing_var:
+                print(f"警告：指定 dir_cols 列不存在：{missing_var}")
+            self.dir_cols = existing_var
+
+            if np.any(self.dir_cols, self.var_cols) is None:
+                print("方向 dir_cols 、速度 var_cols 无效")
+
+        return self
+
+    def transform(self, X):
+        print("处理其他型(时间/布尔)数据...")
+
         return X
 
+    def handle_vec_col(self, dir_cols: List[str] = None, var_cols: List[str] = None) -> 'DataPreprocessor':
+        """将'风向角度制'和'风速列极坐标'数据转换为风矢量
+        dir_cols: 角度值的方向数据，
+        var_cols: 极坐标的风速数据"""
 
-"""处理其他型(时间/布尔)数据"""
+        # 处理前:用极坐标（风速m/s）和风向（0-360）来描述风的强度和方向，
+        # 处理后:用正交坐标系的两个维度（x轴和y轴）上风的强度，来描述上述'风速'和'风向' ['Wx', 'Wy', 'max Wx', 'max Wy']
+        print("处理风矢量...")
+        if dir_cols is None or var_cols is None:
+            print("无'方向'(弧度制)数据、无'速度变量'数据需要处理")
+            return self
+
+        else:
+            df = self.origin_df.copy()
+            print(df.loc[0:2, dir_cols + var_cols])  # 平均风速、最大风速、风向（角度制）
+
+            # 处理步骤：
+            # a.将风向和风速列数据转换为风矢量，重新存入原数据框中
+            # b.2D直方图--通过可视化的方式解释风矢量类型的数据由于原表风速和风向数据的原因
+
+            # 原表风速和风向数据
+            Visualization.plot_hist2d(x=df[dir_cols[0]],  # 'wd'
+                                      y=df[var_cols[0]],  # 'wv'
+                                      xlabel=f'{dir_cols[0]} 风向 [单位：度]',
+                                      ylabel=f'{var_cols[0]} 风速 [单位：米/秒]')
+
+            # 风矢量类型的数据
+            wd_rad = df.pop(dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
+            wv = df.pop(var_cols[0])  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
+            max_wv = df.pop(var_cols[1])
+
+            df['Wx'] = wv * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
+            df['Wy'] = wv * np.sin(wd_rad)
+
+            df['max Wx'] = max_wv * np.cos(wd_rad)  # 计算最大风力'max. mv'的x和y分量，保存到df的'max Wx'列和'max Wy'列中
+            df['max Wy'] = max_wv * np.sin(wd_rad)
+
+            # 不需要初始化任何东西，最适合静态方法，然后类名调用
+            Visualization.plot_hist2d(x=df['Wx'],
+                                      y=df['Wy'],
+                                      xlabel='风的X分量[单位：m/s]',
+                                      ylabel='风的Y分量[单位：m/s]')
+
+            Visualization.plot_hist2d(x=df['max Wx'],
+                                      y=df['max Wy'],
+                                      xlabel='最大风的X分量[单位：m/s]',
+                                      ylabel='最大风的Y分量[单位：m/s]')
+
+            # 对比两图，分解后有利于我们观察风的状况：找到原点（0，0），
+            # 假设向上为北，那么南方向的 风出现次数较多，此外我们还可以观察到东北-西南方向的风
+            return self
 
 
-def process_other_data(self):
-    print("处理其他型(时间/布尔)数据...")
-    if self.other_columns is None:
-        print("无其他型(时间/布尔)不需要处理")
+"""时间序列特别处理"""
+
+
+class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
+    def __init__(self, col: Optional[str] = None, format: Optional[str] = None):
+        self.time_column = col
+        self.format = format
+
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+
+        if self.time_column is None:  # None ，空列表[]
+            print("未指定待处理时间列，检查原数据的全部datetime64[ns]列...")
+            datetime_cols = df.select_dtypes(
+                include=['datetime64[ns]']).columns.to_list()  # pd.Timestamp 已经是 datetime 类型，继承自 Python 的 datetime
+            if datetime_cols:
+                self.time_column = datetime_cols[0] # 只取第一个datetime列
+                print(f"自动识别datetime64[ns]时间列列: {self.time_column}")
+            else:
+                print("数据无datetime64[ns]列需处理")
+
+        else:
+            # 检查指定的列是否实际存在
+            if self.time_column not in df.columns:
+                print(f"警告: 该指定时间列不存在: {self.time_column}")
+                self.time_column = None
+
         return self
-    else:
-        other_df = self.origin_df[self.other_columns]
-        self.history.append('处理其他型(时间/布尔)数据')
 
-    return self
+    def transform(self, X):
+        print("处理时间序列数据...")
+
+        if self.time_column is None:
+            print("无时间序列需处理")
+            return X
+
+        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        # 时间列可能包含：整数/浮点数、datetime对象、Timestamp对象、numpy.datetime64对象、混合数据
+
+        # 1.处理字符串类型的时间列
+        if df[self.time_column].dtype in ['object', 'str']:
+            if self.format is not None:  # 字符串强制检查提供的原数据格式
+                df = self._process_text_time(df=df, col=self.time_column, format=self.format)
+            else:
+              raise ValueError(f"警告: 时间列 '{self.time_column}' 是str/object类型但未提供format参数，请提供格式")
+
+        # 2.指定的列除正常时间ts 1672531200,dt，字符串，混合型外，还有其他的情况。比如整数以及excel日期 44927
+        # 再次确保时间列是datetime类型
+        if not pd.api.types.is_datetime64_any_dtype(df[self.time_column]):
+            print(f"警告: 时间列 '{self.time_column}' 不是datetime类型，尝试转换")
+            df[self.time_column] = pd.to_datetime(df[self.time_column], errors='coerce')
+
+        # 新增时间特征列
+        self._new_features_from_timecols(df=df, col=self.time_column)
+
+        # 周期编码时间列
+        if len(df[self.time_column]) > 0 and not isinstance(df[self.time_column].iloc[0], pd.Timestamp):  # datetime - > timestamp(ts继承自dt也有dt属性)
+            df[self.time_column] = (df[self.time_column] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+
+        ts_series = df[self.time_column].values
+
+        df['Day_sin'] = self._cyclic_encoding(ts_series, 'day')[0]
+        df['Day_cos'] = self._cyclic_encoding(ts_series, 'day')[1]
+        df['Year_sin'] = self._cyclic_encoding(ts_series, 'year')[0]
+        df['Year_cos'] = self._cyclic_encoding(ts_series, 'year')[1]
+        print("新增列'Day_sin'、'Day_cos'、'Day_cos'、'Year_cos'")
+        viz = Visualization()  # 将转换结果可视化
+        viz.plot_time_signals(X=np.array(df['Day sin'])[:25],  # 24小时
+                              y=np.array(df['Day cos'])[:25],
+                              xlabel='时间[单位：时]（Time [h]）',
+                              title='一天中的时间信号（Time of day signal）')
+
+        return df
+
+    def _process_text_time(self, df, col, format):
+        # 处理字符串时间 并排好序
+        print("转换字符串型时间列...")
+        datetime = pd.to_datetime(df.pop(col), format=format, errors='coerce')
+
+        success_rate = datetime.notna().mean()
+        if success_rate <1:
+            print(f"警告: 时间列转换成功率 {success_rate:.1%}")
+
+        df[col] = datetime
+        df = df.sort_values(col, ascending=True)
+
+        print(f"已处理时间字符串列{col}，转成datetime格式")
+        return df
+
+    # 提取新的离散特征，后续支持独热编码
+    def _new_features_from_timecols(self, df, col):
+        print("新增时间特征列...")
+        old_cols = df.columns.tolist()
+
+        # 确保列是datetime类型
+        if not pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = pd.to_datetime(df[col],errors='coerce')
+
+        # 增加夜晚(分类）
+        df['is_night'] = (df[col].dt.hour >= 21).astype('category')
+
+        # 增加季节(分类）
+        df['month'] = df[col].dt.month
+
+        conditions = [
+            df['month'].isin([12, 1, 2]),
+            df['month'].isin([3, 4, 5]),
+            df['month'].isin([6, 7, 8]),
+            df['month'].isin([9, 10, 11]),
+        ]
+
+        choices = ['冬', '春', '夏', '秋']
+        df['season'] = np.select(conditions, choices, default='Missing')
+        # 转换成分类型，保持季节顺序(有序分类) 如果有排序、比较和绘图的情况
+        df['season'] = pd.Categorical(df['season'], categories=['春', '夏', '秋', '冬'], ordered=True)
+        df.drop('month', axis=1, inplace=True)
+
+        # 增加时间间隔(数值)
+        df['timedelta'] = df[col].diff().dt.total_seconds().fillna(0)
+
+        # 增加时间跨度(数值) 对于长期时间序列，可以揭示趋势和周期性（需注意是否为多个独立实体，各自有其起始点）
+        df['days_since_start'] = (df[col] - df[col].iloc[0]).dt.days
+        df['year_since_start'] = df['days_since_start'] / 365.25
+
+        new_cols = [col for col in df.columns if col not in old_cols]
+        print(f"已基于时间列，增加新的特征。包括：{new_cols},共{len(new_cols)}列")
+        print(f"目前的数据形状{df.shape}")
+
+        return df
+
+    # 周期编码函数(23点和1点，12月和1月等在循环空间中很接近- season)
+    def _cyclic_encoding(self, values: np.ndarray, period: str):
+        print("进行周期性编码...")
+
+        # 将时刻序列映射为正弦曲线序列)
+        period_to_seconds = {
+            'hour': 60 * 60,
+            'day': 24 * 60 * 60,
+            'week': 7 * 24 * 60 * 60,
+            'month': 30.44 * 24 * 60 * 60,  # 一月多少秒（平均）
+            'year': 365.2425 * 24 * 60 * 60
+        }
+        if period not in period_to_seconds:
+            raise ValueError(f"不支持的周期类型: {period}。支持的类型: {list(period_to_seconds.keys())}")
+
+        seconds = period_to_seconds[period]
+        sin_encoded = np.sin((values / seconds) * 2 * np.pi)
+        cos_encoded = np.cos((values / seconds) * 2 * np.pi)
+
+        return sin_encoded, cos_encoded
+
 
 
 """处理缺失值"""
@@ -593,7 +870,7 @@ def remove_duplicates(self):
     return self
 
 
-"""删除无用列"""
+"""删除无用列"""  # df['month']
 
 
 def delete_useless_cols(self, target_cols: list = None):
@@ -890,105 +1167,6 @@ def remove_outliers(self, method: Dict = None, target_col: str = None) -> 'DataP
 
         self.history.append(f"处理列异常值-iqr")
 
-        return self
-
-
-"""=============================================== 其他特殊处理 ============================================="""
-
-"""时间序列特别处理"""
-
-
-def handle_time_col(self, col: str = None, format: str = None) -> 'DataPreprocessor':
-    """处理时间列数据
-       params: format 时间列原格式 """
-    print(f"处理时间{col}数据...")
-    df = self.origin_df.copy()
-
-    # a.str -> datatime（原df中删除'Data Time'列）
-    date_time = pd.to_datetime(df.pop(col), format=format)
-    print(date_time.head(5))
-
-    # b.将data_time中数据转换为时间戳格式的数据
-    print(datetime.datetime.timestamp(date_time[5]))
-    timestamp_s = date_time.map(datetime.datetime.timestamp)
-    print(timestamp_s)
-
-    # c.将时刻序列映射为正弦曲线序列
-    day = 24 * 60 * 60  # 一天多少秒
-    year = (365.2425) * day  # 一年多少秒
-
-    df['Day sin'] = np.sin((timestamp_s * 2 * np.pi) / day)
-    df['Day cos'] = np.cos(timestamp_s * (2 * np.pi / day))
-    df['Year sin'] = np.sin((timestamp_s / year) * 2 * np.pi)
-    df['Year cos'] = np.cos(timestamp_s * (2 * np.pi / year))
-    print("新增4列：['Day sin', 'Day cos', 'Year sin', 'Year cos']")
-
-    self.origin_df = df
-    print(f"时间列数据已处理，新增4列:'Day sin', 'Day cos', 'Year sin', 'Year cos'")
-    print(self.origin_df.loc[0:2, ['Day sin', 'Day cos', 'Year sin', 'Year cos']])
-
-    # d.将转换结果可视化
-    viz = Visualization()
-    viz.plot_time_signals(X=np.array(self.origin_df['Day sin'])[:25],  # 24小时
-                          y=np.array(self.origin_df['Day cos'])[:25],
-                          xlabel='时间[单位：时]（Time [h]）',
-                          title='一天中的时间信号（Time of day signal）')
-
-    self.history.append("处理时间数据-正余弦")
-    return self
-
-
-def handle_vec_col(self, dir_cols: List[str] = None, var_cols: List[str] = None) -> 'DataPreprocessor':
-    """将'风向角度制'和'风速列极坐标'数据转换为风矢量
-    dir_cols: 角度值的方向数据，
-    var_cols: 极坐标的风速数据"""
-
-    # 处理前:用极坐标（风速m/s）和风向（0-360）来描述风的强度和方向，
-    # 处理后:用正交坐标系的两个维度（x轴和y轴）上风的强度，来描述上述'风速'和'风向' ['Wx', 'Wy', 'max Wx', 'max Wy']
-    print("处理风矢量...")
-    if dir_cols is None or var_cols is None:
-        print("无'方向'(弧度制)数据、无'速度变量'数据需要处理")
-        return self
-
-    else:
-        df = self.origin_df.copy()
-        print(df.loc[0:2, dir_cols + var_cols])  # 平均风速、最大风速、风向（角度制）
-
-        # 处理步骤：
-        # a.将风向和风速列数据转换为风矢量，重新存入原数据框中
-        # b.2D直方图--通过可视化的方式解释风矢量类型的数据由于原表风速和风向数据的原因
-
-        # 原表风速和风向数据
-        Visualization.plot_hist2d(x=df[dir_cols[0]],  # 'wd'
-                                  y=df[var_cols[0]],  # 'wv'
-                                  xlabel=f'{dir_cols[0]} 风向 [单位：度]',
-                                  ylabel=f'{var_cols[0]} 风速 [单位：米/秒]')
-
-        # 风矢量类型的数据
-        wd_rad = df.pop(dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
-        wv = df.pop(var_cols[0])  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
-        max_wv = df.pop(var_cols[1])
-
-        df['Wx'] = wv * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
-        df['Wy'] = wv * np.sin(wd_rad)
-
-        df['max Wx'] = max_wv * np.cos(wd_rad)  # 计算最大风力'max. mv'的x和y分量，保存到df的'max Wx'列和'max Wy'列中
-        df['max Wy'] = max_wv * np.sin(wd_rad)
-
-        # 不需要初始化任何东西，最适合静态方法，然后类名调用
-        Visualization.plot_hist2d(x=df['Wx'],
-                                  y=df['Wy'],
-                                  xlabel='风的X分量[单位：m/s]',
-                                  ylabel='风的Y分量[单位：m/s]')
-
-        Visualization.plot_hist2d(x=df['max Wx'],
-                                  y=df['max Wy'],
-                                  xlabel='最大风的X分量[单位：m/s]',
-                                  ylabel='最大风的Y分量[单位：m/s]')
-
-        # 对比两图，分解后有利于我们观察风的状况：找到原点（0，0），
-        # 假设向上为北，那么南方向的 风出现次数较多，此外我们还可以观察到东北-西南方向的风
-        self.history.append("处理风矢量")
         return self
 
 

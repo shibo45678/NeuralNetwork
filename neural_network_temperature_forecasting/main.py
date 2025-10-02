@@ -1,5 +1,7 @@
+from sklearn.pipeline import Pipeline
 from src.data.processing import (DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed,
-                                 ColumnsTypeIdentify,ProcessNumericColumns)
+                                 ColumnsTypeIdentify,ProcessTimeseriesColumns,ProcessNumericColumns,
+                                 ProcessCategoricalColumns,ProcessOtherColumns)
 from src.data.exploration import Visualization
 from src.utils.windows import WindowGenerator
 from src.models.cnn import CnnModel
@@ -14,8 +16,8 @@ from src.utils.debug_controller import DebugController
 import os
 import sys
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
-from sklearn.pipeline import Pipeline
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+# sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 
 def main():
@@ -48,12 +50,17 @@ def main():
         # STAGE_START:after_data_preparation
 
         full_pipeline =Pipeline([
-            ('encode_loading',DataLoader(input_files=["data_climate.csv",],pattern = "new_*.csv",data_dir ="data")),
+            ('encode_loading',DataLoader(input_files=["data_climate.csv"],pattern = "new_*.csv",data_dir ="data")),
             ('describing',DescribeData()),
-            ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
+            ('problem_fixer',ProblemColumnsFixed(problem_columns=['T'])),
             ('special_fixer',SpecialColumnsFixed(problem_columns=['T'])),
             ('identify_columns_type',ColumnsTypeIdentify()),
-            ('numeric_cols',ProcessNumericColumns(preserve_integer_types=True))
+            # 时间列要支持周期性编码、离散特征的独热编码astype(category)、新增数值列后续的标准化
+            ('timeseries_processor', ProcessTimeseriesColumns(col='Date Time', format='%d.%m.%Y %H:%M:%S')),
+
+            ('categorical_processor', ProcessCategoricalColumns(cols=['Date Time'],onehot_threshold=12)),
+            ('numeric_processor',ProcessNumericColumns(cols=[],preserve_integer_types=True)), # sin 拿掉
+            ('othercols_processor', ProcessOtherColumns(dir_cols=['wd'], var_cols=['wv', 'max. wv'])),# vec_col 风矢量 要求顺序
 
         ])
         # 执行pipeline
@@ -62,11 +69,7 @@ def main():
 
         preprocessor = (DataPreprocessor(input_files=["data_climate.csv"])
 
-        .identify_column_types()
-        .process_numeric_data()
-        .encode_categorical_data()
-        .process_other_data()
-        .handle_missing_values(cat_strategy='mode', num_strategy='median')
+        .handle_missing_values(cat_strategy='mode', num_strategy='median') # 分类数据里面有季节，填mode好吗
         .remove_duplicates()
         .delete_useless_cols(target_cols=None)
         .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
@@ -74,8 +77,7 @@ def main():
         .check_extreme_features({'name': 'multivariate', 'contamination': 0.025})  # 预期异常比例
         .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
         .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
-        .handle_time_col(col='Date Time', format='%d.%m.%Y %H:%M:%S')  # time_col正余弦
-        .handle_vec_col(dir_cols=['wd'], var_cols=['wv', 'max. wv'])  # vec_col 风矢量 要求顺序
+
         .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
         .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
         config= [

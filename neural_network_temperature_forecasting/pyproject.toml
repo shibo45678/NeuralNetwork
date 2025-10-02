@@ -1,10 +1,40 @@
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
 [project]
-name = "pythonProject1"
+name = "neural_network_temperature_forecasting"
 version = "0.1.0"
+description = "Temperature forecasting using neural networks"
+authors = [
+    {name = "shibo", email = "shibo07031029@126.com"}
+]
+readme="README.md"
+requires-python = ">=3.8"
 dependencies = [
     "numpy>=1.24.4",
-    "pandas>=1.4.4"
+    "pandas>=1.4.4",
+    "tensorflow>=2.10",
+    "matplotlib>=3.5"
 ]
+
+
+# 源代码目录结构
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "black"
+]
+
+# 包在 src 目录中，需要添加这个配置
+[tool.setuptools]
+package-dir = {""="src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 
 [tool.mypy]
 disallow_untyped_defs = true  # 强制函数类型注解
@@ -14,8 +44,15 @@ ignore_missing_imports = true # 全局忽略无存根的库
 [tool.black]
 line_length = 120             # 可选：统一代码格式化配置
 
-[[tool.mypy.overrides]]  # 针对特定文件的规则
+
+
+# 针对特定文件的规则（每个单独）
+# 严格 pandas
+[[tool.mypy.overrides]]
 module = "pandas.*"  # 对有存根的库（如 pandas）保持严格检查
 ignore_missing_imports = false
+
+# 宽松 单独的块
+[[tool.mypy.overrides]]
 module = "main" # 直接匹配文件，不带.py后缀
-disallow_untyped_defs = false
+disallow_untyped_defs = false # 进行宽松的类型检查，遗留代码

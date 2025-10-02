@@ -3,7 +3,10 @@ import pandas as pd
 import numpy as np
 from typing import List
 from sklearn.base import BaseEstimator, TransformerMixin
-from src.data.processing import DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed,ColumnsTypeIdentify,ProcessNumericColumns
+from data.processing import ProcessNumericColumns
+import os
+import sys
+
 
 # 创建测试数据
 test_data = pd.DataFrame({

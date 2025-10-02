@@ -1,6 +1,6 @@
-from src.training.training_models import TrainingModel
-from src.utils.windows import WindowGenerator
-from src.data.processing import DataPreprocessor
+from training.training_models import TrainingModel
+from utils.windows import WindowGenerator
+from data.processing import DataPreprocessor
 import os
 import pandas as pd
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'

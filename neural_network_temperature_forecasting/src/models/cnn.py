@@ -95,8 +95,8 @@ class CnnModel:
         input_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(6, 19), description="输入形状")
         output_shape: Tuple[PositiveInt, PositiveInt] = Field(default=(5, 19),
                                                               description="输出形状。例如 (5,2) 表示预测5个时间步。每个时间步一个值, 2代表输出2个变量")
-        regression_features: PositiveInt = Field(default=1, description="输出数值型特征列个数")
-        num_classes: PositiveInt = Field(default=3, description="输出分类型特征的列别数，如三分类012")
+        regression_features: int = Field(default=1, description="输出数值型特征列个数")
+        num_classes: int = Field(default=3, description="输出分类型特征的列别数，如三分类012")
 
         @field_validator('input_shape')
         def validate_shape_length(cls, v):
@@ -244,8 +244,8 @@ class CnnModel:
         # 创建模型
         model = tf.keras.Model(inputs=inputs, outputs=outputs)
 
-        model._input_shape=input_shape # 保存到模型属性中
-        model._output_shape=output_shape # 方便训练调用
+        model._input_shape = input_shape  # 保存到模型属性中
+        model._output_shape = output_shape  # 方便训练调用
 
         # 编译模型
         model.compile(
@@ -262,11 +262,10 @@ class CnnModel:
         model_config = self._validate_config(config, self.MixedConfig)
 
         input_shape = model_config.input_shape
-        output_shape= model_config.output_shape
+        output_shape = model_config.output_shape
         output_timesteps = model_config.output_timesteps
         regression_features = model_config.regression_features
         num_classes = model_config.num_classes
-
 
         inputs = tf.keras.Input(shape=input_shape)
 
