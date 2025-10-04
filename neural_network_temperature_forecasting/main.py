@@ -52,16 +52,15 @@ def main():
         full_pipeline =Pipeline([
             ('encode_loading',DataLoader(input_files=["data_climate.csv"],pattern = "new_*.csv",data_dir ="data")),
             ('describing',DescribeData()),
-            ('problem_fixer',ProblemColumnsFixed(problem_columns=['T'])),
-            ('special_fixer',SpecialColumnsFixed(problem_columns=['T'])),
+            ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
+            ('special_fixer',SpecialColumnsFixed(problem_columns=[])),
             ('identify_columns_type',ColumnsTypeIdentify()),
             # 时间列要支持周期性编码、离散特征的独热编码astype(category)、新增数值列后续的标准化
             ('timeseries_processor', ProcessTimeseriesColumns(col='Date Time', format='%d.%m.%Y %H:%M:%S')),
-
-            ('categorical_processor', ProcessCategoricalColumns(cols=['Date Time'],onehot_threshold=12)),
-            ('numeric_processor',ProcessNumericColumns(cols=[],preserve_integer_types=True)), # sin 拿掉
             ('othercols_processor', ProcessOtherColumns(dir_cols=['wd'], var_cols=['wv', 'max. wv'])),# vec_col 风矢量 要求顺序
 
+            ('categorical_processor', ProcessCategoricalColumns(cols=['Date Time'], onehot_threshold=12)),
+            ('numeric_processor', ProcessNumericColumns(cols=[], preserve_integer_types=True)),  # sin 拿掉
         ])
         # 执行pipeline
         processed_data = full_pipeline.fit_transform()
