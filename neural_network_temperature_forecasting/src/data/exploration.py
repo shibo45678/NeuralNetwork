@@ -24,10 +24,13 @@ class Visualization:
 
     @staticmethod
     def plot_hist2d(x: pd.Series , y: pd.Series , xlabel: str , ylabel: str ):
-        plt.hist2d(x=x, y=y, bins=(50, 50), vmax=400)
-        plt.colorbar()
+        counts,xedges,yedges,img = plt.hist2d(x=x, y=y, bins=(50, 50), vmax=400,cmap ='viridis')
+        cbar = plt.colorbar(img)
+        cbar.set_label('Counts')
+
         plt.xlabel(xlabel=xlabel)
         plt.ylabel(ylabel=ylabel)
+        plt.tight_layout()
         plt.show()
 
     # @staticmethod

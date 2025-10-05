@@ -12,6 +12,9 @@ import datetime
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 from data.exploration import Visualization
 import joblib
+import matplotlib
+
+matplotlib.interactive(False)  # 明确关闭交互模式
 
 
 class DataPreprocessor:
@@ -190,8 +193,8 @@ class DescribeData(BaseEstimator, TransformerMixin):
 
 class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
 
-    def __init__(self, problem_columns: list = None):
-        self.problem_columns = problem_columns
+    def __init__(self, problem_columns: Optional[list] = None):
+        self.problem_columns = problem_columns or []
         self.columns_to_process_ = []
 
     def fit(self, X, y=None):
@@ -265,8 +268,8 @@ class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
 
 
 class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
-    def __init__(self, problem_columns: list = None):
-        self.problem_columns = problem_columns
+    def __init__(self, problem_columns: Optional[list] = None):
+        self.problem_columns = problem_columns or []
         self.columns_to_process_ = []
 
     def fit(self, X, y=None):
@@ -491,43 +494,42 @@ class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
 class TimeTypeConverter:
     """时间类型转换工具类"""
 
-    @staticmethod
-    def detect_time_type(series):
+    def detect_time_type(self, series):
         """检测时间序列的类型"""
         if len(series) == 0:
             return "empty"
 
-        sample = series.iloc[0] if len(series) > 0 else None
+        clean_series = series.dropna()
+        sample = clean_series.iloc[0] if len(clean_series) > 0 else None
 
         # 检查datetime64类型
-        if pd.api.types.is_datetime64_any_dtype(series):
+        if pd.api.types.is_datetime64_any_dtype(clean_series):
             return "datetime64"
 
         # 检查Timestamp类型
         if isinstance(sample, pd.Timestamp):
-            return "timestamp_object"
+            return "timestamp"
 
         # 检查字符串
         if isinstance(sample, str):
             return "string"
 
         # 检查数值类型
-        if pd.api.types.is_numeric_dtype(series):
+        if pd.api.types.is_numeric_dtype(clean_series):
             if sample is None:
-                return "numeric"
-            # 判断是否是Excel日期还是Unix时间戳
-            if sample > 1000000000:  # 大概是2001年之后
-                return "unix_timestamp"
-            else:
-                return "excel_date"  # 44927
+                return "unknown_numeric"
+            if len(clean_series) < 5:
+                return "unknown_numeric"
+
+            # 判断数值型是否是Excel日期还是Unix时间戳？
+            return self._detect_numeric_time(series=clean_series)
 
         return "unknown"
 
-    @staticmethod
-    def convert_to_datetime(series, time_type=None, format=None):
+    def convert_to_datetime(self, series, time_type=None, format=None):
         """根据类型转换为datetime"""
         if time_type is None:
-            time_type = TimeTypeConverter.detect_time_type(series)
+            time_type = self.detect_time_type(series)
 
         print(f"检测到类型: {time_type}")
 
@@ -535,7 +537,7 @@ class TimeTypeConverter:
             print("已经是datetime64类型，无需转换")
             return series
 
-        elif time_type == "timestamp_object":
+        elif time_type == "timestamp":
             print("Timestamp对象序列，转换为datetime64...")
             return pd.to_datetime(series)
 
@@ -560,20 +562,19 @@ class TimeTypeConverter:
 
         elif time_type == "excel_date":
             print("Excel日期数字，使用origin转换")
-            # Excel的日期系统从1900-01-01开始
+            # Excel的日期系统从1900-01-01开始(已知闰年错误)pandas修复起始时间1899-12-30
             return pd.to_datetime(series, unit='D', origin='1899-12-30')
 
         else:
             print("未知类型，尝试自动解析")
             return pd.to_datetime(series, errors='coerce')
 
-    @staticmethod
-    def get_conversion_info(series, time_type=None, format=None):
+    def get_conversion_info(self, series, time_type=None, format=None):
         """获取转换的详细信息"""
         if time_type is None:
-            time_type = TimeTypeConverter.detect_time_type(series)
+            time_type = self.detect_time_type(series)
 
-        datetime_series = TimeTypeConverter.convert_to_datetime(series, time_type, format)
+        datetime_series = self.convert_to_datetime(series, time_type, format)
 
         info = {
             'original_type': time_type,
@@ -587,6 +588,172 @@ class TimeTypeConverter:
         }
 
         return info, datetime_series
+
+    def _detect_numeric_time(self, series):
+        """检测用数值型时间列"""
+
+        stats = {
+            'min': series.min(),
+            'max': series.max()
+        }
+
+        min_val, max_val = stats['min'], stats['max']
+        unix_range = (1000000000, 4102444800)  # 2001-01-01 到 2100-01-01
+        excel_range = (32874, 54788)  # 1990-01-01 到 2100-01-01
+
+        if (unix_range[0] <= min_val <= max_val <= unix_range[1] and
+                self._check_digit_pattern(series, [10, 13]) and
+                self._is_monotonic_increasing(series)
+                and self._comprehensive_cv_check(series)  # 等时间间隔 检查(众数、CV检查)
+        ):
+            return 'unix_timestamp'
+
+        if (excel_range[0] <= min_val <= max_val <= excel_range[1] and
+                self._check_digit_pattern(series, [5, 6]) and
+                self._is_monotonic_increasing(series)
+                and self._comprehensive_cv_check(series)  # 等时间间隔 检查(众数、CV检查)
+        ):
+            return 'excel_date'
+
+    def _check_digit_pattern(self, series, range):
+        """检查数字位数模式
+        Unix 时间戳：通常是10位（秒）或13位（毫秒）Excel 日期：通常是5-6位整数"""
+        str_sample = series.astype(int).astype(str)
+        digit_counts = str_sample.str.len().value_counts()
+
+        # 计算主要位数的占比
+        if len(digit_counts) > 0:
+            main_digit_count = digit_counts.index[0]
+            main_digit_ratio = digit_counts.iloc[0] / len(series)  # 只有主要位数占比足够高时才认为有固定模式
+
+            if main_digit_ratio > 0.8:
+                return main_digit_count in range
+        else:
+            return False
+
+    def _is_monotonic_increasing(self, series):
+        if len(series) < 2:
+            return False
+        sample = series.head(100).sort_index()
+        return sample.is_monotonic_increasing  # Pandas属性 数据太少可能无法判断。允许相等
+
+    def _common_cv_pattern(self, series):
+        """检查是否具有等时间间隔均匀采样模式(变异系数 相对离散程度)
+            整体CV < 0.3，整数CV < 0.5"""
+        sample = series.head(50)
+        integer_parts = sample.astype(int)
+        fractional_parts = sample % 1
+
+        if len(sample) > 1:
+            # 检查整体序列的CV
+            diffs = sample.diff().dropna()
+            overall_cv = diffs.std() / diffs.mean() if diffs.mean() != 0 else float('inf')
+
+            # 检查整数部分的CV（应该较小，因为主要是日期）
+            int_diffs = integer_parts.diff().dropna()
+            int_cv = int_diffs.std() / int_diffs.mean() if int_diffs.mean() != 0 else float('inf')
+
+            # 计算小数部分的cv(如果存在)
+            fractional_parts = fractional_parts[fractional_parts > 0]  # 过滤掉0
+            if len(fractional_parts) > 1:
+                frac_diffs = fractional_parts.diff().dropna()
+                frac_cv = frac_diffs.std() / frac_diffs.mean() if frac_diffs.mean() != 0 else float('inf')
+            else:
+                frac_cv = float('inf')  # 明确标识特殊情况，在函数后续的逻辑判断中被处理
+
+            return {
+                'overall_cv': overall_cv,
+                'int_cv': int_cv,
+                'frac_cv': frac_cv,
+                'has_fractional': len(fractional_parts) > 0
+
+            }
+
+    def _comprehensive_cv_check(self, series):
+        # 先排序
+        sorted_series = series.sort_index()  # 时间不可逆 原始索引大多跟采集时间来
+
+        if len(sorted_series.dropna()) < 5:
+            return False
+
+        checks = []
+
+        # 检测间隔模式，忽略异常值
+        checks.append(self._detect_interval_pattern(sorted_series))
+
+        # 检测主要间隔模式 基于中位数
+        checks.append(self._cv_pattern_median_based(sorted_series))
+
+        checks.append(self._cv_pattern_chunked(sorted_series))
+
+        pass_count = sum(checks)
+        return pass_count >= 1
+
+    def _detect_interval_pattern(self, series):
+        """检测间隔模式，忽略异常值"""
+        sample = series.head(100)
+        if len(sample) <= 1:
+            return False
+
+        diffs = sample.diff().dropna()
+        if len(diffs) < 2:
+            return False
+
+        # 使用众数（mode）
+        from collections import Counter
+        diff_counter = Counter(diffs.round(3))  # 四舍五入避免浮点误差
+
+        # 找最常见间隔
+        if diff_counter:
+            most_common_diff, most_common_count = diff_counter.most_common(1)[0]  # most_common(1)前1个
+            ratio = most_common_count / len(diffs)
+
+            return ratio > 0.6  # 如果超过60%的间隔相同，认为是规则采样
+
+        return False
+
+    def _cv_pattern_median_based(self, series):
+        sample = series.head(50)
+
+        if len(sample) <= 1:
+            return False
+        diffs = sample.diff().dropna()
+
+        if len(diffs) < 2:
+            return False
+
+        median_diff = diffs.median()
+        if median_diff == 0:
+            return False
+
+        # 基于中位数的“变异系数”
+        mad = (diffs - median_diff).abs().median()  # 中位数绝对偏差
+        robust_cv = mad / median_diff
+
+        return robust_cv < 0.5
+
+    def _cv_pattern_chunked(self, series, chunk_size=10):
+        sample = series.head(100).sort_index()
+
+        if len(sample) <= chunk_size:
+            return self._cv_pattern_median_based(sample)
+
+        chunk_results = []
+
+        step = max(1, chunk_size // 2)
+        for i in range(0, len(sample), step):
+            chunk = sample.iloc[i: min(i + chunk_size, len(sample))]
+
+            # 只有块足够大时才检测
+            if len(chunk) >= max(5, chunk_size // 2):
+                chunk_cv_ok = self._cv_pattern_median_based(chunk)
+                chunk_results.append(chunk_cv_ok)
+
+        if chunk_results:
+            pass_ratio = sum(chunk_results) / len(chunk_results)
+            return pass_ratio > 0.7
+
+        return False
 
 
 """时间序列特别处理"""
@@ -607,6 +774,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         self.auto_detect_string_format = auto_detect_string_format
         self.format = format
         self.common_formats = None
+        self.fitted_ = False
 
     def fit(self, X, y=None):
         if X is None:
@@ -635,74 +803,71 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         print(f"数据类型：\n{df.dtypes}")
 
         # 存储必要的元数据
-        self.sample_data_ = df.head(10).copy()
+        self.sample_data_ = df.head(100).copy()
 
         if self.time_column is None:  # None []
-            print("未指定待处理时间列，检查原数据的全部datetime64[ns]列...")
-            datetime_cols = df.select_dtypes(
-                include=['datetime64[ns]']).columns.tolist()  # pd.Timestamp 已经是 datetime 类型，继承自 Python 的 datetime
-            if datetime_cols:
-                self.time_column = datetime_cols[0]  # 只取第一个datetime列
-                print(f"自动识别datetime64[ns]时间列列: {self.time_column}")
-            else:
-                # 如果没有datetime列，寻找可能的时间列
-                print("数据无datetime64[ns]列需处理，寻找可能的时间列...")
+            print("未指定待处理时间列，检查原数据的全部可能列...")
 
-                potential_time_cols = []
-                for col in df.columns:
-                    col_type = TimeTypeConverter.detect_time_type(df[col])
+            potential_time_cols = []
+            for col in self.sample_data_.columns:
+                col_type = self.time_converter.detect_time_type(self.sample_data_[col])
 
-                    # 自动检测时，排除string/整数型时间列，仅支持指定
-                    if col_type in ['unix_timestamp', 'excel_date', 'timestamp_object']:
-                        potential_time_cols.append((col, col_type))
-                        print(f"_列'{col}':类型 {col_type}")
+                # 自动检测时，排除string/整数型时间列，仅支持指定
+                if col_type in ['unix_timestamp', 'excel_date', 'timestamp', 'datetime64']:
+                    potential_time_cols.append((col, col_type))
+                    print(f"_列'{col}':类型 {col_type}")
 
-                    elif col_type == 'string':
+                elif col_type == 'string':
 
-                        sample_str = str(df[col].iloc[0]) if len(df[col]) > 0 else ""
-                        date_indicators = ['-', '/', ':', '202', '201', '200', '199']
+                    sample_str = str(df[col].iloc[0]) if len(df[col]) > 0 else ""
+                    date_indicators = ['-', '/', ':', '202', '201', '200', '199']
 
-                        time_keywords = ['time', 'date', 'day', 'year', 'month', 'hour', 'minute', 'second']
-                        col_name_lower = col.lower()
+                    time_keywords = ['time', 'date', 'day', 'year', 'month', 'hour', 'minute', 'second']
+                    col_name_lower = col.lower()
 
-                        has_date_content = any(indicator in sample_str for indicator in date_indicators)
-                        has_time_keyword = any(keyword in col_name_lower for keyword in time_keywords)
+                    has_date_content = any(indicator in sample_str for indicator in date_indicators)
+                    has_time_keyword = any(keyword in col_name_lower for keyword in time_keywords)
 
-                        if has_date_content and has_time_keyword:
-                            potential_time_cols.append((col, 'string(time-like)'))
-                            print(f"_列 '{col}':字符串但包含时间格式和关键词")
+                    if has_date_content and has_time_keyword:
+                        potential_time_cols.append((col, 'string(time-like)'))
+                        print(f"_列 '{col}':字符串但包含时间格式和关键词")
 
-                if potential_time_cols:
-                    # 检查是否需要交互式选择
-                    should_use_interactive = (len(potential_time_cols) > 1 and
-                                              getattr(self, 'interactive', False))  # false：若没有属性，默认返回。初始化已保证有交互属性
+            if potential_time_cols:
+                # 检查是否需要交互式选择
+                should_use_interactive = (len(potential_time_cols) > 1 and
+                                          getattr(self, 'interactive', False))  # false：若没有属性，默认返回。初始化已保证有交互属性
 
-                    if should_use_interactive:
-                        print("启用交互式时间列选择模式")
-                        self.time_column = self._interactive_select_time_column(potential_time_cols)
-                    else:
-                        # 非交互模式下自动选择第一个
-                        self.time_column = potential_time_cols[0][0]  # 有点随机，数据存在多个时间列
-                        self.detected_time_type = potential_time_cols[0][1]
-                        print(
-                            f"取第一个元组的结果，识别到可能的时间列 '{self.time_column}'，类型: {self.detected_time_type}")
-
-                        # 尝试检测字符串的format
-                        if self.detected_time_type == 'string':
-                            if self.auto_detect_string_format and hasattr(self, 'sample_date_'):
-                                if self.sample_data_ is not None and self.time_column in self.sample_data_.columns:
-                                    self._smart_format_processing(self.sample_data_[self.time_column])
+                if should_use_interactive:
+                    print("启用交互式时间列选择模式")
+                    self.time_column = self._interactive_select_time_column(potential_time_cols)
+                    for col, col_type in potential_time_cols:
+                        if col == self.time_column:
+                            self.detected_time_type = col_type
+                    print(f"时间列 '{self.time_column}'，类型: {self.detected_time_type}")
 
                 else:
-                    print("未找到可识别的时间列")
-                    self.time_column = None
+                    # 非交互模式下自动选择第一个
+                    self.time_column = potential_time_cols[0][0]  # 有点随机，数据存在多个时间列
+                    self.detected_time_type = potential_time_cols[0][1]
+                    print(
+                        f"取第一个元组的结果，识别到可能的时间列 '{self.time_column}'，类型: {self.detected_time_type}")
+
+                # 尝试检测字符串的format
+                if self.detected_time_type == 'string':
+                    if self.auto_detect_string_format and hasattr(self, 'sample_date_'):
+                        if self.sample_data_ is not None and self.time_column in self.sample_data_.columns:
+                            self._smart_format_processing(self.sample_data_[self.time_column])
+
+            else:
+                print("未找到可识别的时间列")
+                self.time_column = None
         else:
             # 检查'指定的列'是否实际存在
-            if self.time_column not in df.columns:
+            if self.time_column not in self.sample_data_.columns:
                 print(f"警告: 该指定时间列不存在: {self.time_column}")
                 self.time_column = None
             else:  # 检测‘指定列’的时间类型
-                self.detected_time_type = TimeTypeConverter.detect_time_type(df[self.time_column])
+                self.detected_time_type = self.time_converter.detect_time_type(self.sample_data_[self.time_column])
                 print(f"检测到时间列{self.time_column}，时间类型：{self.detected_time_type}")
 
                 if self.detected_time_type == 'string':
@@ -718,11 +883,13 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
                         print(f"未提供的字符串类型时间格式 format，将使用自动检测...")
                         self._smart_format_processing(self.sample_data_[self.time_column])
 
+        self.fitted_ = True
         return self
 
     def transform(self, X):
         print("处理时间序列数据...")
-
+        if not self.fitted_:
+            raise ValueError("必须先调用fit方法")
         if self.time_column is None:
             print("无时间序列需处理")
             return X
@@ -733,7 +900,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         # 使用TimeTypeConverter进行智能转换，如果是字符串类型时间，强制给出format参数
         print(f"使用TimeTypeConverter处理时间列‘{self.time_column}'...")
 
-        conversion_info, datetime_series = TimeTypeConverter.get_conversion_info(
+        conversion_info, datetime_series = self.time_converter.get_conversion_info(
             df[self.time_column],
             self.detected_time_type,
             self.format
@@ -753,15 +920,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         self._new_features_from_timecols(df=df, col=self.time_column)
 
         # add 周期编码时间列 （转换为Unix时间戳秒数,datetime64每个元素都是timestamp实例）
-        df[self.time_column] = (df[self.time_column] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
-
-        ts_series = df[self.time_column].values
-        print("进行周期性编码...")
-        df['Day_sin'] = self._cyclic_encoding(ts_series, 'day')[0]
-        df['Day_cos'] = self._cyclic_encoding(ts_series, 'day')[1]
-        df['Year_sin'] = self._cyclic_encoding(ts_series, 'year')[0]
-        df['Year_cos'] = self._cyclic_encoding(ts_series, 'year')[1]
-        print("新增列'Day_sin'、'Day_cos'、'Day_cos'、'Year_cos'")
+        self._cyclic_encoding(df=df, col=self.time_column)
 
         try:
             viz = Visualization()  # 将转换结果可视化
@@ -781,15 +940,16 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             return None  # 交互属性是true 就继续往下
 
         print('\n' + '=' * 50)
-        print("发现多个可能的字符串类型时间列，请选择：")
+        print("发现多个可能的时间列，请选择：")
 
         # 使用样本数据（如果有）
         sample_df = getattr(self, 'sample_data_', None)
 
         for i, (col, col_type) in enumerate(potential_time_cols):
             if sample_df is not None and col in sample_df.columns:
-                sample_values = sample_df[col].dropna().head(2)
+                sample_values = sample_df[col].dropna().head(5)
                 sample_str = '|'.join([str(val) for val in sample_values])
+                print(f"样例：{sample_str}")
                 na_count = sample_df[col].isna().sum()
                 total_count = len(sample_df[col])
                 print(f" {i + 1}. {col} (类型：{col_type})，空值：{na_count} / {total_count})")
@@ -807,12 +967,17 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
                 choice_idx = int(choice) - 1
                 if 0 <= choice_idx < len(potential_time_cols):
                     selected_col = potential_time_cols[choice_idx][0]
+                    selected_col_type = potential_time_cols[choice_idx][1]
                     print(f"已选择时间列：{selected_col}")
 
                     # 针对字符串时间类型进行的format智能处理 用sample先测试
                     if sample_df is not None and selected_col in sample_df.columns:
-                        self._smart_format_processing(sample_df[selected_col])
-                    return selected_col
+                        if selected_col_type == 'string(time-like)':
+                            self._smart_format_processing(sample_df[selected_col])
+                            return selected_col
+                        else:
+                            return selected_col
+
                 else:
                     print(f"输入 1-{len(potential_time_cols)}之间的数字")
 
@@ -848,7 +1013,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
                     # 验证格式
                     try:
                         test_sample = str(samples.iloc[0])
-                        TimeTypeConverter.convert_to_datetime(test_sample, time_type='string', format=custom_format)
+                        self.time_converter.convert_to_datetime(test_sample, time_type='string', format=custom_format)
                         print(f"使用自定义格式：{custom_format}")
                         self.format = custom_format
                         return
@@ -895,7 +1060,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         print("无法自动检测format格式，尝试直接pd.to_datetime推断...")
 
         # 测试推断结果
-        inferred_result = TimeTypeConverter.convert_to_datetime(samples, time_type='string', format=None)
+        inferred_result = self.time_converter.convert_to_datetime(samples, time_type='string', format=None)
 
         success_rate = (1 - inferred_result.isna().mean()) * 100
 
@@ -970,15 +1135,18 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             format_str = fmt[0]  # 获取实际的格式字符串
             format_desc = fmt[1]  # 获取格式描述（用于调试）
             try:
-                test_samples = samples.head(3)
-                parsed = TimeTypeConverter.convert_to_datetime(series=test_samples, time_type='string', format=format_str)
-
+                test_samples = samples.head(5)
+                parsed = self.time_converter.convert_to_datetime(series=test_samples, time_type='string',
+                                                                 format=format_str)
+                success_rate = parsed.notna().mean()
+                print(f"成功率{success_rate:.1%}")
                 # 检查是否所有样本都能成功解析且没有NAT
-                if not parsed.isna().any():
+
+                if not parsed.isna().any():  # 必须保证一个空值都没有，代表‘所有值’均被成功转换
                     print(f"成功匹配格式: {format_desc} ({format_str})")
                     return format_str  # 返回实际的格式字符串
 
-            except Exception as e:
+            except:
                 continue
 
         # 如果格式都不匹配，使用dateutil的自动解析如果其能解析，外层的基本pd.to_datetime就一定能解析（更强）
@@ -995,7 +1163,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
     def _process_text_time(self, df, col, format):
         # 处理字符串时间 并排好序
         print("转换字符串型时间列...")
-        datetime_series = TimeTypeConverter.convert_to_datetime(
+        datetime_series = self.time_converter.convert_to_datetime(
             df[col],
             time_type='string',
             format=format
@@ -1018,7 +1186,7 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
 
         # 确保列是datetime类型
         if not pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = TimeTypeConverter.convert_to_datetime(df[col])
+            df[col] = self.time_converter.convert_to_datetime(df[col])
 
         # 气象学中夜间通常指日落到日出的时间段
         hour = df[col].dt.hour
@@ -1034,8 +1202,9 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             hour_non_null = hour[non_null_mask]
             month_non_null = month[non_null_mask]
 
+            # add : is_night 冬季夜间更长，夏季夜间更短
             is_night_basic = (hour_non_null >= 20) | (hour_non_null < 6)
-            # 季节性调整：冬季夜间更长，夏季夜间更短
+
             winter_night = ((month_non_null.isin([12, 1, 2])) & (
                     (hour_non_null >= 19) | (hour_non_null < 7)))  # 冬季（12,1,2月）：晚上7点到早上7点
             summer_night = ((month_non_null.isin([6, 7, 8])) & (
@@ -1043,21 +1212,21 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             autumn_night = ((month_non_null.isin([9, 10, 11])) & is_night_basic)
             spring_night = ((~month_non_null.isin([12, 1, 2, 6, 7, 8, 9, 10, 11])) & is_night_basic)
 
-            # 确定季节类型
+            # 将计算结果赋给非空位置(仅判断 is_night 二分的情况，季节已经单独判断）
+            night_conditions = winter_night | summer_night | autumn_night | spring_night
+            is_night_series[non_null_mask] = night_conditions.astype(bool)
+
+            # add : season 确定季节类型
             winter_mask = month_non_null.isin([12, 1, 2])
             summer_mask = month_non_null.isin([6, 7, 8])
             autumn_mask = month_non_null.isin([9, 10, 11])
             spring_mask = ~(winter_mask | summer_mask | autumn_mask)
 
-            # add 季节类型
             season_type_series[non_null_mask] = np.select(
                 [winter_mask, summer_mask, autumn_mask, spring_mask],
                 ['winter', 'summer', 'autumn', 'spring'], default='Missing'
             )
-            # 合并季节性夜间定义
-            night_condition = winter_night | summer_night | autumn_night | spring_night
-            # 将计算结果赋给非空位置
-            is_night_series[non_null_mask] = night_condition.astype(bool)
+
             # 空值保持为Nan
             is_night_series[~non_null_mask] = np.nan
             season_type_series[~non_null_mask] = np.nan
@@ -1071,28 +1240,10 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         print(f"df['season_type'].dtype: {df['season'].dtype}")
         print(f"is_night列中空值数量: {df['is_night'].isna().sum()}")
 
-        # 时间段分类
-        conditions = [
-            (hour < 6),  # 深夜
-            ((hour >= 6) & (hour < 9)),  # 早晨
-            ((hour >= 9) & (hour < 12)),  # 上午
-            ((hour >= 12) & (hour < 14)),  # 中午
-            ((hour >= 14) & (hour < 18)),  # 下午
-            ((hour >= 18) & (hour < 21)),  # 傍晚
-            (hour >= 21)  # 夜晚
-        ]
-        choices = ['深夜', '早晨', '上午', '中午', '下午', '傍晚', '夜晚']
-        df['time_of_day'] = np.select(conditions, choices, default='未知')
-        df['time_of_day'] = pd.Categorical(
-            df['time_of_day'],
-            categories=['深夜', '早晨', '上午', '中午', '下午', '傍晚', '夜晚'],
-            ordered=True
-        )
-
-        # 增加时间间隔(数值)
+        # add : 时间间隔(数值)
         df['timedelta'] = df[col].diff().dt.total_seconds().fillna(0)
 
-        # 增加时间跨度(数值) 对于长期时间序列，可以揭示趋势和周期性（需注意是否为多个独立实体，各自有其起始点）
+        # add :时间跨度(数值) 对于长期时间序列，可以揭示趋势和周期性（需注意是否为多个独立实体，各自有其起始点）
         df['days_since_start'] = (df[col] - df[col].iloc[0]).dt.days
         df['years_since_start'] = df['days_since_start'] / 365.25
 
@@ -1103,8 +1254,13 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         return df
 
     # 周期编码函数(23点和1点，12月和1月等在循环空间中很接近- season)
-    def _cyclic_encoding(self, values: np.ndarray, period: str):
+    def _cyclic_encoding(self, df, col):
         # 将时刻序列映射为正弦曲线序列)
+
+        # 转换为Unix时间戳秒数,datetime64每个元素都是timestamp实例
+        df[col] = (df[col] - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+        ts_val = df[col].values
+
         period_to_seconds = {
             'hour': 60 * 60,
             'day': 24 * 60 * 60,
@@ -1112,14 +1268,16 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             'month': 30.44 * 24 * 60 * 60,  # 一月多少秒（平均）
             'year': 365.2425 * 24 * 60 * 60
         }
-        if period not in period_to_seconds:
-            raise ValueError(f"不支持的周期类型: {period}。支持的类型: {list(period_to_seconds.keys())}")
 
-        seconds = period_to_seconds[period]
-        sin_encoded = np.sin((values / seconds) * 2 * np.pi)
-        cos_encoded = np.cos((values / seconds) * 2 * np.pi)
+        print("进行周期性编码...")
+        df['Day_sin'] = np.sin((ts_val / period_to_seconds['day']) * 2 * np.pi)
+        df['Day_cos'] = np.cos((ts_val / period_to_seconds['day']) * 2 * np.pi)
+        df['Year_sin'] = np.sin((ts_val / period_to_seconds['year']) * 2 * np.pi)
+        df['Year_cos'] = np.cos((ts_val / period_to_seconds['year']) * 2 * np.pi)
 
-        return sin_encoded, cos_encoded
+        print("新增列'Day_sin'、'Day_cos'、'Day_cos'、'Year_cos'")
+
+        return df
 
 
 """处理特殊数据(向量）"""
@@ -1131,9 +1289,30 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
         self.var_cols = var_cols
 
     def fit(self, X, y=None):
-        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        if X is None:
+            raise ValueError("输入数据X不能为None")
 
-        if np.any(self.dir_cols, self.var_cols) is None:
+        if hasattr(X, 'shape'):
+            if X.shape[0] == 0:
+                raise ValueError("输入数据不能为空数据集")
+            if len(X.shape) > 1 and X.shape[1] == 0:
+                raise ValueError("输入数据不能没有特征列")
+
+        elif hasattr(X, '__len__'):
+            if len(X) == 0:
+                raise ValueError("输入数据不能为空")
+
+        try:
+            if not isinstance(X, pd.DataFrame):
+                df = pd.DataFrame(X)
+                print("输入数据已转换为DataFrame")
+            else:
+                df = X.copy()
+                print("输入数据是DataFrame,已创建副本")
+        except Exception as e:
+            raise ValueError(f"数据转换失败：{e}")
+
+        if self.dir_cols is None or self.var_cols is None:
             print("未指定待处理vector列，方向 dir_cols 、速度 var_cols 不可为空...")
             return self
 
@@ -1147,13 +1326,11 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
 
             existing_var = [col for col in self.var_cols if col in df.columns]
             missing_var = [col for col in self.var_cols if col not in df.columns]
+
             if missing_var:
-                print(f"警告：指定 dir_cols 列不存在：{missing_var}")
+                print(f"警告：指定 var_cols 列不存在：{missing_var}")
             if existing_var:
                 self.var_cols = existing_var
-
-            if self.dir_cols is None or self.var_cols is None:
-                print("方向 dir_cols 、速度 var_cols 无效")
 
             return self
 
@@ -1165,11 +1342,10 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
         # 处理前:用极坐标（风速m/s）和风向（0-360）来描述风的强度和方向，
         # 处理后:用正交坐标系的两个维度（x轴和y轴）上风的强度，来描述上述'风速'和'风向' ['Wx', 'Wy', 'max Wx', 'max Wy']
         if not self.dir_cols or not self.var_cols:
-            print("无'方向'(弧度制)数据、无'速度变量'数据需要处理")
+            print("无'方向'(弧度制)数据 or 无'速度变量'数据需要处理")
             return X
         else:
             df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
-            print(df.loc[0:2, self.dir_cols + self.var_cols])  # 平均风速、最大风速、风向（角度制）
 
             # 处理步骤：
             # a.将风向和风速列数据转换为风矢量，重新存入原数据框中
@@ -1184,29 +1360,26 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
 
                 # 风矢量类型的数据
                 wd_rad = df.pop(self.dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
-                wv = df.pop(self.var_cols[0])  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
-                max_wv = df.pop(self.var_cols[1])
 
-                df['Wx'] = wv * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
-                df['Wy'] = wv * np.sin(wd_rad)
+                for i in self.var_cols:
+                    value = df.pop(i)  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
+                    df[f'Wx_{i}'] = value * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
+                    df[f'Wy_{i}'] = value * np.sin(wd_rad)
+                    print("新增风矢量数据:")
+                    print(df[[f'Wx_{i}', f'Wy_{i}']].head())
 
-                df['max Wx'] = max_wv * np.cos(wd_rad)  # 计算最大风力'max. mv'的x和y分量，保存到df的'max Wx'列和'max Wy'列中
-                df['max Wy'] = max_wv * np.sin(wd_rad)
+                    # 不需要初始化任何东西，最适合静态方法，然后类名调用
+                    Visualization.plot_hist2d(x=df[f'Wx_{i}'],
+                                              y=df[f'Wy_{i}'],
+                                              xlabel='X分量[单位：m/s]',
+                                              ylabel='Y分量[单位：m/s]')
 
-                print(f"新增风矢量列: Wx, Wy, max_Wx, max_Wy")
-                print("转换后的风矢量数据:")
-                print(df[['Wx', 'Wy', 'max_Wx', 'max_Wy']].head())
+                    Visualization.plot_hist2d(x=df[f'Wx_{i}'],
+                                              y=df[f'Wy_{i}'],
+                                              xlabel='X分量[单位：m/s]',
+                                              ylabel='Y分量[单位：m/s]')
 
-                # 不需要初始化任何东西，最适合静态方法，然后类名调用
-                Visualization.plot_hist2d(x=df['Wx'],
-                                          y=df['Wy'],
-                                          xlabel='风的X分量[单位：m/s]',
-                                          ylabel='风的Y分量[单位：m/s]')
 
-                Visualization.plot_hist2d(x=df['max Wx'],
-                                          y=df['max Wy'],
-                                          xlabel='最大风的X分量[单位：m/s]',
-                                          ylabel='最大风的Y分量[单位：m/s]')
             except Exception as e:
                 print(f"风矢量处理失败：{e}")
                 return X
@@ -1218,18 +1391,62 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
 
 
 class ProcessNumericColumns(BaseEstimator, TransformerMixin):
-    def __init__(self, cols: Optional[list] = None, preserve_integer_types: bool = True):
-        self.numeric_columns = cols
-        # object(字符串/混合类型，里面'1', '2', 'abc'] -> [1.0, 2.0, nan]) 默认是float64 -> 改为 [1, 2, nan]
-        # 其他数值型不变 int64，float64
+    def __init__(self, cols: Optional[list] = None,
+                 preserve_integer_types: bool = True,
+                 exclude_cols: Optional[list] = None):
+
+        self.numeric_columns = cols or []
         self.preserve_integer_types = preserve_integer_types
         self.original_dtypes_ = {}
+        self.exclude_cols= exclude_cols or []
+
+        """
+        preserve_integer_types:
+        object(字符串/混合类型，里面'1', '2', 'abc'] -> [1.0, 2.0, nan]) 默认是float64 -> 改为 [1, 2, nan]
+        其他数值型不变 int64，float64
+        """
 
     def fit(self, X, y=None):
-        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+
+        if X is None:
+            raise ValueError("输入数据X不能为None")
+
+        if hasattr(X, 'shape'):
+            if X.shape[0] == 0:
+                raise ValueError("输入数据不能为空数据集")
+            if len(X.shape) > 1 and X.shape[1] == 0:
+                raise ValueError("输入数据不能没有特征列")
+
+        elif hasattr(X, '__len__'):
+            if len(X) == 0:
+                raise ValueError("输入数据不能为空")
+
+        try:
+            if not isinstance(X, pd.DataFrame):
+                df = pd.DataFrame(X)
+                print("输入数据已转换为DataFrame")
+            else:
+                df = X.copy()
+                print("输入数据是DataFrame,已创建副本")
+        except Exception as e:
+            raise ValueError(f"数据转换失败：{e}")
+
+
         if self.numeric_columns is None:  # None ，空列表[]
             print("未指定待处理数值列，检查原数据的全部数值列...")
-            self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
+            all_numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+
+            excluded = []
+            for col in self.exclude_cols:
+                if col in all_numeric_cols:
+                    all_numeric_cols.remove(col)
+                    excluded.append(col)
+            if excluded:
+                print(f"已排除时间列：{excluded}")
+
+            self.numeric_columns = all_numeric_cols
+
             if not self.numeric_columns:
                 print("数据无数值列需处理")
             else:
@@ -1288,17 +1505,42 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         return df
 
 
+
 """处理分类型/字符串数据"""  # 提前将日期生成的分类列进行astype
 
 
 class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
-    def __init__(self, cols: Optional[list] = None, onehot_threshold: int = 10):
-        self.categorical_columns = cols
+    def __init__(self, cols: Optional[list] = None,
+                 onehot_threshold: int = 5
+                 ):
+        self.categorical_columns = cols or []
         self.onehot_threshold = onehot_threshold  # 独热编码的最大类别数阈值
         self.onehot_columns_ = []  # 记录哪些列使用了独热编码
 
     def fit(self, X, y=None):
-        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        if X is None:
+            raise ValueError("输入数据X不能为None")
+
+        if hasattr(X, 'shape'):
+            if X.shape[0] == 0:
+                raise ValueError("输入数据不能为空数据集")
+            if len(X.shape) > 1 and X.shape[1] == 0:
+                raise ValueError("输入数据不能没有特征列")
+
+        elif hasattr(X, '__len__'):
+            if len(X) == 0:
+                raise ValueError("输入数据不能为空")
+
+        try:
+            if not isinstance(X, pd.DataFrame):
+                df = pd.DataFrame(X)
+                print("输入数据已转换为DataFrame")
+            else:
+                df = X.copy()
+                print("输入数据是DataFrame,已创建副本")
+        except Exception as e:
+            raise ValueError(f"数据转换失败：{e}")
+
         if self.categorical_columns is None:
             print("未指定待处理字符串/分类列，检查原数据的全部字符串/分类列...")
             self.categorical_columns = df.select_dtypes(include=['object', 'category']).columns.tolist()
@@ -1374,9 +1616,25 @@ class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
 
 """处理缺失值"""
 
+class HandleMissingValue(BaseEstimator,TransformerMixin):
+    def __init__(self,cat_strategy:str='custom', # 支持众数填充/自定义Missing填充
+                 num_strategy: str = 'mean',
+                 num_fill_value=None):
+        pass
+    def fit(self,X,y=None):
+        return self
+
+
+    def transform(self,X):
+
+
+
+
+
+        return X
 
 def handle_missing_values(self,
-                          cat_strategy: str = 'custom',  # 支持众数填充/自定义Missing填充
+                          cat_strategy: str = 'custom',
                           num_strategy: str = 'mean', num_fill_value=None):  # 支持均值/众数/中位数/常数填充需写num_fill_value
     """处理缺失值"""
     print("==========统计空值结果==========")
@@ -2003,3 +2261,46 @@ def save_constant_values(self, filename: str = 'constant.pkl'):
     joblib.dump(self.constant_values, filepath)
     print(f"constant_values saved to: {filepath}")
     return filepath
+
+#
+# self.time_processor = time_processor
+# self._time_processor_checked = False
+# self.exclude_cols = exclude_cols or []  # 不管空不空，都将之前的时间除掉
+#
+#
+#
+# # 延迟获取列：在fit时才检查time_processor是否已经fit
+#             if self.time_processor is not None:
+#                 time_col = self._get_time_column_safely()  # none 或 'Date Time'
+#                 if time_col and time_col not in self.exclude_cols:
+#                     self.exclude_cols.append(time_col)
+#
+#                 excluded = []
+#                 for col in self.exclude_cols:
+#                     if col in all_numeric_cols:
+#                         all_numeric_cols.remove(col)
+#                         excluded.append(col)
+#                 if excluded:
+#                     print(f"已排除时间列：{excluded}")
+#
+#             self.numeric_columns = all_numeric_cols
+#
+# def _get_time_column_safely(self):
+#     """安全地获取时间列，处理未fit的情况"""
+#     if self._time_processor_checked:
+#         return
+#
+#     if not hasattr(self.time_processor, 'time_column'):
+#         print("警告：time_processor未初始化，无法获取时间列")
+#         return None
+#
+#     time_col = self.time_processor.time_column
+#     if time_col is None:
+#         print("警告：time_processor.time_column 为 None")
+#
+#     # 检查time_processor是否已经fit（通过自定义属性fitted_判断）
+#     if not hasattr(self.time_processor, 'fitted_') or not self.time_processor.fitted_:
+#         print("警告：time_processor可能未执行fit方法")
+#
+#     self._time_processor_checked = True
+#     return time_col

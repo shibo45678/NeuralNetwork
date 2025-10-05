@@ -1,5 +1,5 @@
 from data.processing import ProcessOtherColumns
-
+import pandas as pd
 
 
 def test_process_other_columns():
@@ -26,9 +26,9 @@ def test_process_other_columns():
         processor.fit(df_normal)
         result_normal = processor.transform(df_normal)
         print("✅ 正常数据处理成功")
-        print("新增列:", [col for col in result_normal.columns if col in ['Wx', 'Wy', 'max_Wx', 'max_Wy']])
+        print("新增列:", [col for col in result_normal.columns not in df_normal])
         print("转换结果:")
-        print(result_normal[['Wx', 'Wy', 'max_Wx', 'max_Wy']].head())
+        print(result_normal.head())
     except Exception as e:
         print(f"❌ 正常数据处理失败: {e}")
 
@@ -48,8 +48,7 @@ def test_process_other_columns():
         processor.fit(df_single_var)
         result_single = processor.transform(df_single_var)
         print("✅ 单风速数据处理成功")
-        print("max_Wx 和 max_Wy 应该与 Wx, Wy 相同")
-        print(result_single[['Wx', 'Wy', 'max_Wx', 'max_Wy']].head())
+        print(result_single.head())
     except Exception as e:
         print(f"❌ 单风速数据处理失败: {e}")
 
@@ -106,7 +105,7 @@ def test_process_other_columns():
         result_partial = processor.transform(df_partial)
         print("✅ 部分列存在处理成功")
         print("应该只处理存在的列")
-        print("结果列:", [col for col in result_partial.columns if col in ['Wx', 'Wy', 'max_Wx', 'max_Wy']])
+        print("结果列:", [col for col in result_partial.columns])
     except Exception as e:
         print(f"❌ 部分列存在处理失败: {e}")
 
@@ -132,7 +131,7 @@ def test_process_other_columns():
         print("角度 270° 应该对应 (0, -10)")
         print("角度 360° 应该对应 (10, 0)")
         print("实际结果:")
-        print(result_boundary[['Wx', 'Wy']])
+        print(result_boundary)
     except Exception as e:
         print(f"❌ 边界角度处理失败: {e}")
 
@@ -153,7 +152,7 @@ def test_process_other_columns():
         result_zero = processor.transform(df_zero_wind)
         print("✅ 零风速处理成功")
         print("所有风矢量分量应该为 0")
-        print(result_zero[['Wx', 'Wy', 'max_Wx', 'max_Wy']])
+        print(result_zero)
     except Exception as e:
         print(f"❌ 零风速处理失败: {e}")
 

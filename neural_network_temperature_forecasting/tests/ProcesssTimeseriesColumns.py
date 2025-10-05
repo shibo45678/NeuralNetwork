@@ -1,6 +1,7 @@
 import pandas as pd
-from  data.processing import ProcessTimeseriesColumns,TimeTypeConverter
+from data.processing import ProcessTimeseriesColumns, TimeTypeConverter
 import numpy as np
+
 
 def test_process_timeseries_columns():
     """全面测试 ProcessTimeseriesColumns 类的各种边界情况"""
@@ -28,9 +29,9 @@ def test_process_timeseries_columns():
     # print("混合数据测试:")
     # print(df_mixed)
     # print("数据类型:", df_mixed['mixed_time'].dtype)
-
+    #
     # try:
-    #     processor = ProcessTimeseriesColumns(col='mixed_time', format='%Y-%m-%d')
+    #     processor = ProcessTimeseriesColumns(col='mixed_time',auto_detect_string_format=True)
     #     processor.fit(df_mixed)
     #     result_mixed = processor.transform(df_mixed)
     #     print("✅ 混合数据已处理")
@@ -39,28 +40,33 @@ def test_process_timeseries_columns():
     #     print(result_mixed[['mixed_time', 'Day_sin', 'Day_cos']])
     # except Exception as e:
     #     print(f"❌ 混合数据处理失败: {e}")
-
+    #
     # 测试2: 纯字符串日期（带格式）
     print("\n2. 测试纯字符串日期（带格式）")
     df_string = pd.DataFrame({
-        'string_date': ['20230101', '20230102', '20230103', '20230104'],
-        'auto_time': ['2023-01-01', '2023-01-02', '2023-01-03', np.nan],
-        'infer_time':['01/01/2023', '12/01/2023', '31/12/2023', '12/31/2023'],
-        'strange_time': ['20820001', '00012023', '31/12/2023', '12/31/2023'],
-        'value': [1, 2, 3, 4]
+        'string_date': ['20230101', '20230102', '20230103', '20230104', '20230104'],
+        'auto_time': ['2023-01-01', '2023-01-02', '2023-01-03', np.nan, np.nan],
+        'infer_time': ['01/01/2023', '12/01/2023', '31/12/2023', '12/31/2023', '12/01/2023'],
+        'strange_time': ['2023-01-01 23:23:12', '00012023', '31/12/2023', '12/31/2023', '2024-01-01 23:23:12'],
+        'value': [1, 2, 3, 4, 5],
+        'perfect_seconds': [1633046400, 1633046401, 1633046402, 1633046403, 1633046406],
+        'mixed_time': [1633046400, 1633046400, 1633046400, 1633046403.412, 1633046403.412],
+        'excel_time': [44927, 44928, 44929, 44929.1,44930.1],
+        'excel_wrong_time': [44927, 44928, 44929, 4430, 44929]
+
     })
 
     try:
-        processor = ProcessTimeseriesColumns(format=None,auto_detect_string_format=True)
+        processor = ProcessTimeseriesColumns(format=None, auto_detect_string_format=True)
         processor.fit(df_string)
         result_string = processor.transform(df_string)
         print("✅ 字符串日期处理成功")
-        print("处理后的时间列:", result_string['strange_time'
-                                               ].head())
+        print("处理后的时间列:", result_string['excel_time'
+        ])
         print("处理后的季节列:", result_string['season'].tolist())
     except Exception as e:
         print(f"❌ 字符串日期处理失败: {e}")
-
+    #
     # # 测试3: 字符串日期但没有提供format
     # print("\n3. 测试字符串日期但没有提供format")
     # df_string_no_format = pd.DataFrame({
@@ -138,8 +144,8 @@ def test_process_timeseries_columns():
     #     print("✅ 不存在的列处理成功（应该跳过处理）")
     # except Exception as e:
     #     print(f"❌ 不存在的列处理失败: {e}")
-
-    # 测试8: 空DataFrame
+    #
+    # # 测试8: 空DataFrame
     # print("\n8. 测试空DataFrame")
     # df_empty = pd.DataFrame(columns=['time_col', 'value'])
     #
@@ -151,11 +157,11 @@ def test_process_timeseries_columns():
     # except Exception as e:
     #     print(f"❌ 空DataFrame处理结果: {e}") # 抛出空数据集的错
 
-    # # 测试9: 季节划分正确性
+    # 测试9: 季节 is night，time_of_day 划分正确性
     # print("\n9. 测试季节划分正确性")
     # df_seasons = pd.DataFrame({
-    #     'date': pd.date_range('2023-01-01', periods=12, freq='ME'),  # 全年各月
-    #     'value': range(12)
+    #     'date': pd.date_range('2023-01-01', periods=20, freq='6h'),
+    #     'value': range(20)
     # })
     #
     # try:
@@ -163,18 +169,18 @@ def test_process_timeseries_columns():
     #     processor.fit(df_seasons)
     #     result_seasons = processor.transform(df_seasons)
     #     print("✅ 季节划分测试")
-    #     season_months = result_seasons[['date', 'season']].copy()
-    #     season_months['month'] = pd.to_datetime(season_months['date'], unit='s').dt.month
-    #     print(season_months[['month', 'season']].to_string(index=False))
+    #     season_months = result_seasons[['date', 'season','is_night','timedelta','days_since_start','years_since_start']].copy()
+    #     season_months['datetime'] = pd.to_datetime(season_months['date'], unit='s')
+    #     print(season_months[['date','datetime', 'season','is_night','timedelta','days_since_start','years_since_start']].to_string(index=False))
     #
     #     # 检查季节划分是否正确
     #     # 当使用分类变量分组时，pandas 默认会显示所有可能的分类组合（即使某些分类在数据中不存在
-    #     season_mapping = result_seasons.groupby('season',observed=True)['date'].count()
+    #     season_mapping = result_seasons.groupby('is_night',observed=True)['date'].count()
     #     print("各季节数据点数量:", season_mapping.to_dict())
     #
     # except Exception as e:
     #     print(f"❌ 季节划分测试失败: {e}")
-    #
+
     # # 测试10: 周期编码功能
     # print("\n10. 测试周期编码功能")
     # df_cyclic = pd.DataFrame({
