@@ -1,7 +1,7 @@
 from sklearn.pipeline import Pipeline
-from src.data.processing import (DataLoader ,DescribeData,ProblemColumnsFixed,SpecialColumnsFixed,
+from src.data.processing import (DataLoader,DescribeData,DeleteUselessCols,RemoveDuplicates,ProblemColumnsFixed,SpecialColumnsFixed,
                                  ColumnsTypeIdentify,ProcessTimeseriesColumns,ProcessNumericColumns,
-                                 ProcessCategoricalColumns,ProcessOtherColumns)
+                                 ProcessCategoricalColumns,ProcessOtherColumns,)
 from src.data.exploration import Visualization
 from src.utils.windows import WindowGenerator
 from src.models.cnn import CnnModel
@@ -52,6 +52,8 @@ def main():
         full_pipeline =Pipeline([
             ('encode_loading',DataLoader(input_files=["data_climate.csv"],pattern = "new_*.csv",data_dir ="data")),
             ('describing',DescribeData()),
+            ('delete_cols',DeleteUselessCols(target_cols=[])),
+            ('remove_duplicates',RemoveDuplicates(download_config={'enabled': False})), # 不下载
             ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
             ('special_fixer',SpecialColumnsFixed(problem_columns=[])),
             ('identify_columns_type',ColumnsTypeIdentify()),
@@ -60,24 +62,32 @@ def main():
             ('othercols_processor', ProcessOtherColumns(dir_cols=['wd'], var_cols=['wv', 'max. wv'])),# vec_col 风矢量 要求顺序
             ('numeric_processor', ProcessNumericColumns(cols=[], preserve_integer_types=True,exclude_cols=['Day_sin','Day_cos','Year_sin','Year_cos'])),
             ('categorical_processor', ProcessCategoricalColumns(cols=['Date Time'], onehot_threshold=12)),
+
+
+
+                                .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
+                                # 初步iqr清理 + 业务异常值(目前仅处理少数物理异常)，填充后可再精细算法清理
+                                .remove_outliers(method='iqr')
+                                .handle_missing_values(cat_strategy='mode',
+                                                       num_strategy='median')  # 异常值处理前慎用均值填充 分类数据里面有季节，填mode好吗
+                                .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
+
         ])
+
         # 执行pipeline
-        processed_data = full_pipeline.fit_transform()
+        processed_data = full_pipeline.fit_transform(X,y)
 
 
         preprocessor = (DataPreprocessor(input_files=["data_climate.csv"])
 
-        .handle_missing_values(cat_strategy='mode', num_strategy='median') # 分类数据里面有季节，填mode好吗
-        .remove_duplicates()
-        .delete_useless_cols(target_cols=None)
-        .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
-        .check_extreme_features({'name': 'zscore', 'threshold': 3})
-        .check_extreme_features({'name': 'multivariate', 'contamination': 0.025})  # 预期异常比例
-        .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
-        .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
 
+
+
+
+        .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
         .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
         .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
+
         config= [
             ('minmax', {'feature_range': (0, 1), 'columns': ['T']}),
             # ('std_scaler', {'columns': []}),

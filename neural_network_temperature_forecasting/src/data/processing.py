@@ -1,10 +1,12 @@
 from sklearn.base import BaseEstimator, TransformerMixin
+from functools import wraps
+from sklearn.utils.validation import check_array, check_consistent_length
 from pathlib import Path
 import codecs
 import os
 import csv
 import glob
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -15,6 +17,64 @@ import joblib
 import matplotlib
 
 matplotlib.interactive(False)  # 明确关闭交互模式
+
+
+def validate_input(validate_y=True, allow_empty=False, **param_checks):
+    """输入验证装饰器
+        Args:
+            validate_y: 是否验证y参数
+            allow_empty: 是否允许空数据集（用于某些特殊场景）
+    """
+
+    def decorator(method):
+        @wraps(method)  # 保持原始函数名和文档字符串
+        def wrapper(self, X, y=None, *args, **kwargs):
+            # 基础X验证
+            if X is None:
+                raise ValueError("输入数据X不能为None")
+
+            if not allow_empty:
+                if hasattr(X, 'shape'):
+                    if X.shape[0] == 0:
+                        raise ValueError("输入数据X不能为空")
+                    if len(X.shape) > 1 and X.shape[1] == 0:
+                        raise ValueError("输入数据X的特征列不能为空")
+                elif hasattr(X, '__len__') and len(X) == 0:
+                    raise ValueError("输入数据X不能为空")
+
+            if not isinstance(X, (pd.DataFrame, np.ndarray, list)):
+                try:
+                    X = check_array(X, ensure_2d=False)
+                except:
+                    raise TypeError(f"输入数据X必须是DataFrame,array或者list格式，其为{type(X)}")
+
+            # y的验证
+            if validate_y and y is not None:
+                if not isinstance(y, (pd.Series, np.ndarray, list)):
+                    try:
+                        y = check_array(y, ensure_2d=False)
+                    except:
+                        raise TypeError(f"数据数据y必须是Series，array或者list，其为{type(y)}")
+
+                # 检查样本数量一致性
+                x_len = X.shape[0] if hasattr(X, 'shape') else len(X)
+                y_len = y.shape[0] if hasattr(y, 'shape') else len(y)
+
+                if x_len != y_len:
+                    raise ValueError(f"X和y长度不一致：{x_len} vs {y_len}")
+
+            # 检查参数
+            for param_name, check_func in param_checks.items():
+                if hasattr(self, param_name):
+                    value = getattr(self, param_name)
+                    if not check_func(value):
+                        raise ValueError(f"无效参数值 {param_name}:{value}")
+
+            return method(self, X, y, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 class DataPreprocessor:
@@ -146,34 +206,17 @@ class DescribeData(BaseEstimator, TransformerMixin):
     def __init__(self):
         self.stats = None
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        self._describe_data(df)
 
         return self
 
-    def transform(self, X):
-        if isinstance(X, pd.DataFrame):
-            self._describe_data(X)
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
+        if y is not None:
+            return X, y
         return X
 
     def _describe_data(self, df: pd.DataFrame):
@@ -188,6 +231,132 @@ class DescribeData(BaseEstimator, TransformerMixin):
         print(df.isna().sum())
 
 
+"""删除无用列"""
+
+
+class DeleteUselessCols(BaseEstimator, TransformerMixin):
+    def __init__(self, target_cols: Optional[list] = None):
+        self.target_cols = target_cols or []
+
+    @validate_input(validate_y=False)  # 删除列不需要验证y
+    def fit(self, X, y=None):
+        if self.target_cols is None:
+            print("调用删除无用列功能，但未填写列名")
+
+        # 检查目标列是否存在
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
+        if self.target_cols:
+            existing_cols = [col for col in self.target_cols if col in df.columns]
+            missing_cols = [col for col in self.target_cols if col not in df.columns]
+            if missing_cols:
+                print(f"警告: 以下列不存在，将被忽略: {missing_cols}")
+            self.target_cols = existing_cols
+        else:
+            self.target_cols = []
+
+        return self
+
+    @validate_input(validate_y=True)  # transform时需要验证y
+    def transform(self, X, y=None):
+        print("移除无用列...")
+        if not self.target_cols:
+            print("没有需要删除的列")
+            return X
+
+        X = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
+        X_cleaned = X.drop(columns=self.target_cols, axis=1)
+        print(f"移除了{len(self.target_cols)}个列: {self.target_cols}")
+
+        if y is not None:
+            return X_cleaned, y  # y保持不变
+        return X_cleaned
+
+
+"""移除重复值"""
+
+
+class RemoveDuplicates(BaseEstimator, TransformerMixin):
+    def __init__(self, download_config: Optional[Dict[str, Union[str, bool]]] = None):
+        self._has_downloaded = False  # 防止重复下载
+        if download_config is None:
+            self.download_config = {
+                'enabled': False,
+                'path': './output',
+                'filename': 'duplicate_rows.csv'}
+        else:
+            self.download_config = dict(download_config)  # 确保是字典，否则get黄色
+
+    @validate_input(validate_y=True)
+    def fit(self, X, y=None):
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X  # fit 不用管y 还可以叫df
+
+        self.retain_indices_ = ~df.duplicated(keep='first')
+        return self
+
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
+        print("移除重复行...")
+        if ~self.retain_indices_ is None or len(~self.retain_indices_) == 0:
+            print("无重复值需要处理")
+            return X
+
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
+        initial_count = len(X_)
+        X_cleaned = X_[self.retain_indices_]
+        removed_count = initial_count - len(X_cleaned)
+        print(f"移除了{removed_count}个重复行")
+
+        if hasattr(self, 'download_config') and self.download_config.get('enabled', False):
+            self._download_duplicate_rows(X_)
+
+        if y is not None:
+            if hasattr(y, 'iloc'):
+                y_cleaned = y.iloc[self.retain_indices_]
+            else:
+                y_cleaned = y[self.retain_indices_]
+
+            return X_cleaned, y_cleaned
+
+        return X_cleaned
+
+    def _download_duplicate_rows(self, df):
+        if self._has_downloaded:
+            print("重复数据已下载过，跳过本次下载")
+            return
+        if ~self.retain_indices_ is None or len(~self.retain_indices_) == 0:
+            print("无重复数据可下载")
+            return
+
+        print("下载重复数据(包括唯一行及重复行...")
+        # 所有重复的行都为True，只有唯一的行为False。默认'first'重复值中的第一个，是False被保留
+        duplicate_mask = df.duplicated(keep=False)
+        duplicate_rows = df[duplicate_mask]  # 注意这里和retain_indices不一致 方便检查 保留唯一行
+        duplicate_count = len(duplicate_rows)
+        print(f"识别到 {duplicate_count} 行(包含唯一行和其所有重复行")
+
+        path = self.download_config.get('path', './output')
+        filename = self.download_config.get('filename', 'duplicate_rows')
+
+        if not filename.endswith('.csv'):
+            filename += '.csv'
+        if path and duplicate_rows is not None and len(duplicate_rows) > 0:
+            # 确保目录存在
+            os.makedirs(path, exist_ok=True)
+            # 构建完整文件路径
+            file_path = os.path.join(path, filename)
+
+            # 下载重复数据
+            try:
+                duplicate_rows.to_csv(file_path, index=False)
+                print(f"重复数据已下载到: {file_path}")
+                self._has_downloaded = True
+            except Exception as e:
+                print(f"下载重复数据失败: {e}")
+
+        else:
+            print("未配置下载路径或无重复数据可下载")
+
+
 """一般问题列正则处理"""
 
 
@@ -197,36 +366,13 @@ class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
         self.problem_columns = problem_columns or []
         self.columns_to_process_ = []
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        print("一般问题列正则处理...")
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
-
-        print(f"数据形状：{df.shape}")
-        print(f"数据类型：\n{df.dtypes}")
-
         if self.problem_columns is None:
             print("使用修复列功能，但未指定待修复问题列")
             return self
+
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         # 确认问题列是否存在
         self.columns_to_process_ = [col for col in self.problem_columns if col in df.columns]
@@ -238,30 +384,36 @@ class ProblemColumnsFixed(BaseEstimator, TransformerMixin):
         print(f"将处理 {len(self.columns_to_process_)} 个问题列: {self.columns_to_process_}")
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
         """应用正则清洗转换"""
         if not self.columns_to_process_:
             return X
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        print("一般问题列正则处理...")
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
         processed_count = 0
 
         for col in self.columns_to_process_:
-            if col in df.columns:
+            if col in X_.columns:
                 # 记录处理前信息
-                non_null_count: int = df[col].notna().sum()
+                non_null_count: int = X_[col].notna().sum()
                 if non_null_count > 0:
-                    sample_value = df[col].iloc[0]
+                    sample_value = X_[col].iloc[0]
                     print(f"问题列第一个元素：{sample_value}")
 
-                    df[col] = (df[col]
+                    X_[col] = (X_[col]
                     .astype(str)
                     .str.extract(r'([-+]?\d*\.?\d+)', expand=False)[0])  # expand=False 返回Series
 
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    X_[col] = pd.to_numeric(X_[col], errors='coerce')
                     processed_count += 1
                     print(f"列 '{col}':已转文本，正则清洗，转回数值")
         print(f"正则清洗完成: 成功处理 {processed_count}/{len(self.columns_to_process_)} 个列")
-        return df
+
+        if y is not None:
+            return X_, y
+
+        return X_
 
 
 """修复问题列-列包含df"""
@@ -272,35 +424,14 @@ class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
         self.problem_columns = problem_columns or []
         self.columns_to_process_ = []
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
-
-        print(f"数据形状：{df.shape}")
-        print(f"数据类型：\n{df.dtypes}")
 
         if self.problem_columns is None:
             print("使用'特别修复'列功能，但未指定待修复问题列")
             return self
+
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         missing_cols = [col for col in self.problem_columns if col not in df.columns]
         if missing_cols:
@@ -363,21 +494,22 @@ class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
 
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
         print("开始修改问题列...")
         if not self.columns_to_process_:
             print("没有需要修复的列")
             return X
 
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
 
         for col in self.columns_to_process_:  # fit判断过，但可能单独调transform
-            if col not in df.columns:
+            if col not in X_.columns:
                 print(f"列 '{col}' 不存在于数据中，跳过")
                 continue
 
             print(f"\n修复列: {col}")
-            series = df[col].copy()
+            series = X_[col].copy()
             # 提取每个DataFrame的第一个值
             extracted_values = []
             for i, inner_value in enumerate(series):
@@ -405,11 +537,11 @@ class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
             series_fixed = pd.Series(extracted_values, index=series.index, name=col)
 
             # 替换原列
-            df[col] = series_fixed
+            X_[col] = series_fixed
 
             # 验证修复结果
-            if len(df[col]) > 0:
-                sample_value = df[col].iloc[0]
+            if len(X_[col]) > 0:
+                sample_value = X_[col].iloc[0]
                 print(f"修复后的{col}列类型: {type(sample_value)},值: {sample_value}")
 
             """检查原Series是否在某些操作下表现出DataFrame行为"""
@@ -433,7 +565,10 @@ class SpecialColumnsFixed(BaseEstimator, TransformerMixin):
                 print(f"检查columns失败：{str(e)}")
 
         print(f"\n修复完成: 处理了 {len(self.columns_to_process_)} 个问题列")
-        return df
+
+        if y is not None:
+            return X_, y
+        return X_
 
 
 """识别列类型"""
@@ -445,31 +580,9 @@ class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
         self.categorical_columns = None
         self.other_columns = None
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
-
-        print(f"数据形状：{df.shape}")
-        print(f"数据类型：\n{df.dtypes}")
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         # 数值型列(整型/浮点型）
         self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -484,7 +597,10 @@ class ColumnsTypeIdentify(BaseEstimator, TransformerMixin):
 
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
+        if y is not None:
+            return X, y
         return X
 
 
@@ -776,31 +892,9 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         self.common_formats = None
         self.fitted_ = False
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
-
-        print(f"数据形状：{df.shape}")
-        print(f"数据类型：\n{df.dtypes}")
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         # 存储必要的元数据
         self.sample_data_ = df.head(100).copy()
@@ -886,7 +980,8 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
         self.fitted_ = True
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
         print("处理时间序列数据...")
         if not self.fitted_:
             raise ValueError("必须先调用fit方法")
@@ -894,20 +989,20 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             print("无时间序列需处理")
             return X
 
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
         # 时间列可能包含：整数/浮点数、datetime对象、Timestamp对象、numpy.datetime64对象、混合数据
 
         # 使用TimeTypeConverter进行智能转换，如果是字符串类型时间，强制给出format参数
         print(f"使用TimeTypeConverter处理时间列‘{self.time_column}'...")
 
         conversion_info, datetime_series = self.time_converter.get_conversion_info(
-            df[self.time_column],
+            X_[self.time_column],
             self.detected_time_type,
             self.format
         )
 
         # 更新列数据
-        df[self.time_column] = datetime_series
+        X_[self.time_column] = datetime_series
         print(f"原始类型: {conversion_info['original_type']}")
         print(f"转换后类型: {conversion_info['converted_type']}")
         print(f"转换成功率: {conversion_info['success_rate']:.2f}%")
@@ -917,21 +1012,23 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
             print(f"警告: 时间列转换成功率较低 ({conversion_info['success_rate']:.2f}%)")
 
         # add 新增时间特征列
-        self._new_features_from_timecols(df=df, col=self.time_column)
+        self._new_features_from_timecols(df=X_, col=self.time_column)
 
         # add 周期编码时间列 （转换为Unix时间戳秒数,datetime64每个元素都是timestamp实例）
-        self._cyclic_encoding(df=df, col=self.time_column)
+        self._cyclic_encoding(df=X_, col=self.time_column)
 
         try:
             viz = Visualization()  # 将转换结果可视化
-            viz.plot_time_signals(X=np.array(df['Day sin'])[:25],  # 24小时
-                                  y=np.array(df['Day cos'])[:25],
+            viz.plot_time_signals(X=np.array(X_['Day sin'])[:25],  # 24小时
+                                  y=np.array(X_['Day cos'])[:25],
                                   xlabel='时间[单位：时]（Time [h]）',
                                   title='一天中的时间信号（Time of day signal）')
         except:
             print("可视化组件不可用，跳过绘图")
 
-        return df
+        if y is not None:
+            return X_, y
+        return X_
 
     def _interactive_select_time_column(self, potential_time_cols):
         """交互式选择字符串型时间列"""
@@ -1288,29 +1385,10 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
         self.dir_cols = dir_cols
         self.var_cols = var_cols
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
 
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         if self.dir_cols is None or self.var_cols is None:
             print("未指定待处理vector列，方向 dir_cols 、速度 var_cols 不可为空...")
@@ -1334,7 +1412,7 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
 
             return self
 
-    def transform(self, X):
+    def transform(self, X, y=None):
         print("处理风矢量...")
         """将'风向角度制'和'风速列极坐标'数据转换为风矢量
         dir_cols: 角度值的方向数据，
@@ -1345,7 +1423,7 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
             print("无'方向'(弧度制)数据 or 无'速度变量'数据需要处理")
             return X
         else:
-            df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+            X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
 
             # 处理步骤：
             # a.将风向和风速列数据转换为风矢量，重新存入原数据框中
@@ -1353,38 +1431,40 @@ class ProcessOtherColumns(BaseEstimator, TransformerMixin):
 
             try:
                 # 原表风速和风向数据
-                Visualization.plot_hist2d(x=df[self.dir_cols[0]],  # 'wd'
-                                          y=df[self.var_cols[0]],  # 'wv'
+                Visualization.plot_hist2d(x=X_[self.dir_cols[0]],  # 'wd'
+                                          y=X_[self.var_cols[0]],  # 'wv'
                                           xlabel=f'{self.dir_cols[0]} 风向 [单位：度]',
                                           ylabel=f'{self.var_cols[0]} 风速 [单位：米/秒]')
 
                 # 风矢量类型的数据
-                wd_rad = df.pop(self.dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
+                wd_rad = X_.pop(self.dir_cols[0]) * np.pi / 180  # 风向由角度制转换为弧度制
 
                 for i in self.var_cols:
-                    value = df.pop(i)  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
-                    df[f'Wx_{i}'] = value * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
-                    df[f'Wy_{i}'] = value * np.sin(wd_rad)
+                    value = X_.pop(i)  # 先抓出 再丢了 将df中的wv列保存到wv中，并从原来的df中删除
+                    X_[f'Wx_{i}'] = value * np.cos(wd_rad)  # 计算平均风力wv的x和y分量，保存到df的'Wx'列和'Wy'列中
+                    X_[f'Wy_{i}'] = value * np.sin(wd_rad)
                     print("新增风矢量数据:")
-                    print(df[[f'Wx_{i}', f'Wy_{i}']].head())
+                    print(X_[[f'Wx_{i}', f'Wy_{i}']].head())
 
                     # 不需要初始化任何东西，最适合静态方法，然后类名调用
-                    Visualization.plot_hist2d(x=df[f'Wx_{i}'],
-                                              y=df[f'Wy_{i}'],
+                    Visualization.plot_hist2d(x=X_[f'Wx_{i}'],
+                                              y=X_[f'Wy_{i}'],
                                               xlabel='X分量[单位：m/s]',
                                               ylabel='Y分量[单位：m/s]')
 
-                    Visualization.plot_hist2d(x=df[f'Wx_{i}'],
-                                              y=df[f'Wy_{i}'],
+                    Visualization.plot_hist2d(x=X_[f'Wx_{i}'],
+                                              y=X_[f'Wy_{i}'],
                                               xlabel='X分量[单位：m/s]',
                                               ylabel='Y分量[单位：m/s]')
 
+                if y is not None:
+                    return X_, y
 
             except Exception as e:
                 print(f"风矢量处理失败：{e}")
                 return X
 
-            return df
+            return X_
 
 
 """处理数值型数据"""  # 可以将时间生成的sin cos 除掉 'timedelta' 'days_since_start' 'year_since_start'
@@ -1398,7 +1478,7 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         self.numeric_columns = cols or []
         self.preserve_integer_types = preserve_integer_types
         self.original_dtypes_ = {}
-        self.exclude_cols= exclude_cols or []
+        self.exclude_cols = exclude_cols or []
 
         """
         preserve_integer_types:
@@ -1406,31 +1486,9 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
         其他数值型不变 int64，float64
         """
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
-
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         if self.numeric_columns is None:  # None ，空列表[]
             print("未指定待处理数值列，检查原数据的全部数值列...")
@@ -1469,19 +1527,20 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
 
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
         print("处理数值型数据...")
         if not self.numeric_columns:
             print("无数值列需要处理")
             return X
 
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
         for col in self.numeric_columns:
-            if col in df.columns:
+            if col in X_.columns:
                 # 保存原类型
-                original_dtype = df[col].dtype
+                original_dtype = X_[col].dtype
 
-                df[col] = pd.to_numeric(df[col], errors='coerce')  # object 不报错，转NaN 默认是float64。
+                X_[col] = pd.to_numeric(X_[col], errors='coerce')  # object 不报错，转NaN 默认是float64。
 
                 # 如果标记为保持整数类型、原始是整数类型、转换后没有小数部分，尝试转回整数
                 if (self.preserve_integer_types and
@@ -1489,21 +1548,23 @@ class ProcessNumericColumns(BaseEstimator, TransformerMixin):
                         np.issubdtype(self.original_dtypes_[col], np.integer)):
 
                     # 检查是否所有非空值都是整数
-                    non_null_values = df[col].dropna()
+                    non_null_values = X_[col].dropna()
                     if len(non_null_values) > 0:
                         # 方法：直接检查小数部分是否为0 .00
                         decimal_parts = non_null_values % 1
                         all_integers = np.all(decimal_parts == 0)  # bool
                         if all_integers:
-                            df[col] = df[col].astype('Int64')
-                print(f"列 {col} 已确认是数值型 (原类型: {original_dtype} -> 现类型: {df[col].dtype})")
+                            X_[col] = X_[col].astype('Int64')
+                print(f"列 {col} 已确认是数值型 (原类型: {original_dtype} -> 现类型: {X_[col].dtype})")
             else:
                 print(f"列{col}不在数据中")
                 continue
 
-        print("数值型数据处理完成")
-        return df
+            if y is not None:
+                return X_, y
 
+        print("数值型数据处理完成")
+        return X_
 
 
 """处理分类型/字符串数据"""  # 提前将日期生成的分类列进行astype
@@ -1517,29 +1578,9 @@ class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
         self.onehot_threshold = onehot_threshold  # 独热编码的最大类别数阈值
         self.onehot_columns_ = []  # 记录哪些列使用了独热编码
 
+    @validate_input(validate_y=False)
     def fit(self, X, y=None):
-        if X is None:
-            raise ValueError("输入数据X不能为None")
-
-        if hasattr(X, 'shape'):
-            if X.shape[0] == 0:
-                raise ValueError("输入数据不能为空数据集")
-            if len(X.shape) > 1 and X.shape[1] == 0:
-                raise ValueError("输入数据不能没有特征列")
-
-        elif hasattr(X, '__len__'):
-            if len(X) == 0:
-                raise ValueError("输入数据不能为空")
-
-        try:
-            if not isinstance(X, pd.DataFrame):
-                df = pd.DataFrame(X)
-                print("输入数据已转换为DataFrame")
-            else:
-                df = X.copy()
-                print("输入数据是DataFrame,已创建副本")
-        except Exception as e:
-            raise ValueError(f"数据转换失败：{e}")
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
         if self.categorical_columns is None:
             print("未指定待处理字符串/分类列，检查原数据的全部字符串/分类列...")
@@ -1559,31 +1600,34 @@ class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
 
         # 确定哪些列使用独热编码
         for col in self.categorical_columns:
-            if col != 'Date Time':  # 时间列不参与独热编码
-                unique_count = df[col].nunique()  # Excludes NA values by default.
-                if unique_count <= self.onehot_threshold:
-                    self.onehot_columns_.append(col)
-                    print(f"列 '{col}' 将使用独热编码 (唯一值数量: {unique_count})")
+            unique_count = df[col].nunique()  # Excludes NA values by default.
+            if unique_count <= self.onehot_threshold:
+                self.onehot_columns_.append(col)
+                print(f"列 '{col}' 将使用独热编码 (唯一值数量: {unique_count})")
+
         return self
 
-    def transform(self, X):
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):
         print("处理分类型/字符串数据...")
 
         if self.categorical_columns is None:
             print("无分类型/字符串列需处理")
             return X
 
-        df = pd.DataFrame(X).copy() if not isinstance(X, pd.DataFrame) else X.copy()
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
 
         for col in self.categorical_columns:
             # 处理字符串类型的时间分列
             if col == 'Date Time':
                 # object 转 datetime
-                df = self._strptime(df, col)
+                X_ = self._strptime(X_, col)
             if col in self.onehot_columns_:
-                df = self._onehot(df, col)
+                X_ = self._onehot(X_, col)
 
-        return df
+        if y is not None:
+            return X_, y
+        return X_
 
     def _strptime(self, df, col):
         # 处理字符串时间 并排好序
@@ -1614,115 +1658,9 @@ class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
         return df
 
 
-"""处理缺失值"""
-
-class HandleMissingValue(BaseEstimator,TransformerMixin):
-    def __init__(self,cat_strategy:str='custom', # 支持众数填充/自定义Missing填充
-                 num_strategy: str = 'mean',
-                 num_fill_value=None):
-        pass
-    def fit(self,X,y=None):
-        return self
-
-
-    def transform(self,X):
-
-
-
-
-
-        return X
-
-def handle_missing_values(self,
-                          cat_strategy: str = 'custom',
-                          num_strategy: str = 'mean', num_fill_value=None):  # 支持均值/众数/中位数/常数填充需写num_fill_value
-    """处理缺失值"""
-    print("==========统计空值结果==========")
-    print(self.origin_df.isna().sum())
-
-    print("处理缺失值...")
-    # 1.分类列/字符列填充
-    for col in self.categorical_columns:
-        if self.origin_df[col].isna().any():
-            # 众数填充
-            if cat_strategy == 'mode':
-                # 确保列中有非空值来计算众数
-                non_null_data = self.origin_df[col].dropna()
-                if len(non_null_data) > 0:
-                    mode_val = non_null_data.mode()  # 多个众数
-                    if len(mode_val) > 0:
-                        self.origin_df[col].fillna(mode_val[0], inplace=True)
-                        print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(第1个众数)")
-                    else:
-                        self.origin_df[col].fillna('Unknown', inplace=True)
-                        print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(仅1个众数)")
-                else:  # 整列空值，填充Missing
-                    self.origin_df[col].fillna('Missing', inplace=True)
-                    print(f"categorical:{col}列，{cat_strategy}填充模式无法填充(整列空值)")
-
-            # 自定义Missing
-            if cat_strategy == 'custom':
-                self.origin_df[col].fillna('Missing', inplace=True)
-                print(f"categorical:{col}列，'自定义'填充模式(保留Missing)")
-
-    # 2.数值列填充
-    for col in self.numeric_columns:
-        if self.origin_df[col].isna().sum() > 0:
-            if num_strategy == 'mean':
-                self.origin_df[col].fillna(self.origin_df[col].mean(), inplace=True)
-                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mean()}")
-            elif num_strategy == 'median':
-                self.origin_df[col].fillna(self.origin_df[col].median(), inplace=True)
-                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].median()}")
-            elif num_strategy == 'mode':  # 第一个众数
-                self.origin_df[col].fillna(self.origin_df[col].mode()[0], inplace=True)
-                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mode()[0]}")
-            elif num_strategy == 'constant' and num_fill_value is not None:
-                self.origin_df[col].fillna(num_fill_value, inplace=True)
-                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{num_fill_value}")
-
-    self.history.append('处理缺失值')
-    return self
-
-
-"""移除重复值"""
-
-
-def remove_duplicates(self):
-    """移除重复行"""
-    print("移除重复行...")
-    df = self.origin_df.copy()
-    # 所有重复的行都为True，只有唯一的行为False,默认'first'是False被保留
-    duplicate_mask = df.duplicated(keep=False)
-    duplicate_rows = df[duplicate_mask]
-    # duplicate_rows.to_csv("duplicate_rows.csv") # 下载重复数据
-
-    initial_count = len(self.origin_df)
-    self.origin_df.drop_duplicates(inplace=True)
-    removed_count = initial_count - len(self.origin_df)
-    print(f"移除了{removed_count}个重复行")
-
-    self.history.append("处理重复行")
-    return self
-
-
-"""删除无用列"""  # df['month']
-
-
-def delete_useless_cols(self, target_cols: list = None):
-    """移除无用列"""
-    print("移除无用列...")
-    if target_cols is None:
-        print("调用删除无用列功能，但未填写列名")
-        return self
-    else:
-        self.origin_df.drop(target_cols, axis=1)
-        print(f"移除了{len(target_cols)}个列")
-        self.history.append("移除无用列")
-    return self
-
 
 """查看数值列异常值(3种方式)"""
+
 
 
 def check_extreme_features(self, method: Dict = None):  # z = (x - μ) / σ 单位标准差 >=3个标准差算异常
@@ -1858,61 +1796,6 @@ def check_extreme_features(self, method: Dict = None):  # z = (x - μ) / σ 单�
         return self
 
 
-"""=============================================== 抽样数据 ============================================="""
-
-"""系统抽样（等间隔抽样）"""
-
-
-def systematic_resample(self, start_index: int = 5, step: int = 6) -> 'DataPreprocessor':
-    """系统抽样（等间隔抽样）"""
-    print("系统抽样（等间隔抽样）...")
-
-    # 保证时间数据是排好序的
-    original_shape = self.origin_df.shape
-    self.origin_df = self.origin_df.iloc[start_index::step]
-    resampled_shape = self.origin_df.shape
-
-    print(f"等间隔抽样: 从索引 {start_index} 开始，步长 {step}，共 {len(self.origin_df)} 个样本")
-    print(f"原始数据形状：{original_shape}")
-    print(f"重采样后数据形状：{resampled_shape}")
-    print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
-    self.history.append("系统抽样(等间隔抽样)")
-    return self  # 返回实例本身以支持链式调用
-
-
-"""基于时间重采样"""
-
-
-def time_based_resample(self, time_column: str = None,
-                        freq: str = 'H',  # 重采样频率 ('H'-小时, 'D'-天, 'W'-周等)
-                        aggregation: str = 'mean'  # 聚合方法 ('mean', 'sum', 'max', 'min', 'first', 'last')
-                        ) -> 'DataPreprocessor':
-    """适用于时间序列数据"""
-    print("基于时间重采样...")
-
-    if time_column not in self.origin_df.columns:
-        print(f"时间列 '{time_column}' 不存在于数据中，未完成基于时间序列的采样")
-        return self
-
-    else:
-        original_shape = self.origin_df.shape
-        self.origin_df = (
-            self.origin_df
-            .set_index(time_column)
-            .resample(freq)
-            .agg(aggregation)
-            .reset_index()
-        )
-        resampled_shape = self.origin_df.shape
-
-        print(f"时间重采样: 频率 {freq}，聚合方法 {aggregation}")
-        print(f"原始数据形状：{original_shape}")
-        print(f"重采样后数据形状：{resampled_shape}")
-        print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
-        self.history.append("基于时间重采样")
-        return self
-
-
 """=============================================== 极端数据 ============================================="""
 
 """处理异常值"""
@@ -2003,6 +1886,133 @@ def remove_outliers(self, method: Dict = None, target_col: str = None) -> 'DataP
 
         self.history.append(f"处理列异常值-iqr")
 
+        return self
+
+
+
+"""处理缺失值"""
+
+
+class HandleMissingValue(BaseEstimator, TransformerMixin):
+    def __init__(self, cat_strategy: str = 'custom',  # 支持众数填充/自定义Missing填充
+                 num_strategy: str = 'mean',
+                 num_fill_value=None):
+        pass
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X
+
+
+def handle_missing_values(self,
+                          cat_strategy: str = 'custom',
+                          num_strategy: str = 'mean', num_fill_value=None):  # 支持均值/众数/中位数/常数填充需写num_fill_value
+    """处理缺失值"""
+    print("==========统计空值结果==========")
+    print(self.origin_df.isna().sum())
+
+    print("处理缺失值...")
+    # 1.分类列/字符列填充
+    for col in self.categorical_columns:
+        if self.origin_df[col].isna().any():
+            # 众数填充
+            if cat_strategy == 'mode':
+                # 确保列中有非空值来计算众数
+                non_null_data = self.origin_df[col].dropna()
+                if len(non_null_data) > 0:
+                    mode_val = non_null_data.mode()  # 多个众数
+                    if len(mode_val) > 0:
+                        self.origin_df[col].fillna(mode_val[0], inplace=True)
+                        print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(第1个众数)")
+                    else:
+                        self.origin_df[col].fillna('Unknown', inplace=True)
+                        print(f"categorical:{col}列，{cat_strategy}填充模式完成填充(仅1个众数)")
+                else:  # 整列空值，填充Missing
+                    self.origin_df[col].fillna('Missing', inplace=True)
+                    print(f"categorical:{col}列，{cat_strategy}填充模式无法填充(整列空值)")
+
+            # 自定义Missing
+            if cat_strategy == 'custom':
+                self.origin_df[col].fillna('Missing', inplace=True)
+                print(f"categorical:{col}列，'自定义'填充模式(保留Missing)")
+
+    # 2.数值列填充
+    for col in self.numeric_columns:
+        if self.origin_df[col].isna().sum() > 0:
+            if num_strategy == 'mean':
+                self.origin_df[col].fillna(self.origin_df[col].mean(), inplace=True)
+                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mean()}")
+            elif num_strategy == 'median':
+                self.origin_df[col].fillna(self.origin_df[col].median(), inplace=True)
+                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].median()}")
+            elif num_strategy == 'mode':  # 第一个众数
+                self.origin_df[col].fillna(self.origin_df[col].mode()[0], inplace=True)
+                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{self.origin_df[col].mode()[0]}")
+            elif num_strategy == 'constant' and num_fill_value is not None:
+                self.origin_df[col].fillna(num_fill_value, inplace=True)
+                print(f"numeric:{col}列，{num_strategy}填充模式完成填充，填充值{num_fill_value}")
+
+    self.history.append('处理缺失值')
+    return self
+
+
+
+
+
+"""=============================================== 抽样数据 ============================================="""
+
+"""系统抽样（等间隔抽样）"""
+
+
+def systematic_resample(self, start_index: int = 5, step: int = 6) -> 'DataPreprocessor':
+    """系统抽样（等间隔抽样）"""
+    print("系统抽样（等间隔抽样）...")
+
+    # 保证时间数据是排好序的
+    original_shape = self.origin_df.shape
+    self.origin_df = self.origin_df.iloc[start_index::step]
+    resampled_shape = self.origin_df.shape
+
+    print(f"等间隔抽样: 从索引 {start_index} 开始，步长 {step}，共 {len(self.origin_df)} 个样本")
+    print(f"原始数据形状：{original_shape}")
+    print(f"重采样后数据形状：{resampled_shape}")
+    print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
+    self.history.append("系统抽样(等间隔抽样)")
+    return self  # 返回实例本身以支持链式调用
+
+
+"""基于时间重采样"""
+
+
+def time_based_resample(self, time_column: str = None,
+                        freq: str = 'H',  # 重采样频率 ('H'-小时, 'D'-天, 'W'-周等)
+                        aggregation: str = 'mean'  # 聚合方法 ('mean', 'sum', 'max', 'min', 'first', 'last')
+                        ) -> 'DataPreprocessor':
+    """适用于时间序列数据"""
+    print("基于时间重采样...")
+
+    if time_column not in self.origin_df.columns:
+        print(f"时间列 '{time_column}' 不存在于数据中，未完成基于时间序列的采样")
+        return self
+
+    else:
+        original_shape = self.origin_df.shape
+        self.origin_df = (
+            self.origin_df
+            .set_index(time_column)
+            .resample(freq)
+            .agg(aggregation)
+            .reset_index()
+        )
+        resampled_shape = self.origin_df.shape
+
+        print(f"时间重采样: 频率 {freq}，聚合方法 {aggregation}")
+        print(f"原始数据形状：{original_shape}")
+        print(f"重采样后数据形状：{resampled_shape}")
+        print(f"移除了 {original_shape[0] - resampled_shape[0]} 行")
+        self.history.append("基于时间重采样")
         return self
 
 
@@ -2261,46 +2271,3 @@ def save_constant_values(self, filename: str = 'constant.pkl'):
     joblib.dump(self.constant_values, filepath)
     print(f"constant_values saved to: {filepath}")
     return filepath
-
-#
-# self.time_processor = time_processor
-# self._time_processor_checked = False
-# self.exclude_cols = exclude_cols or []  # 不管空不空，都将之前的时间除掉
-#
-#
-#
-# # 延迟获取列：在fit时才检查time_processor是否已经fit
-#             if self.time_processor is not None:
-#                 time_col = self._get_time_column_safely()  # none 或 'Date Time'
-#                 if time_col and time_col not in self.exclude_cols:
-#                     self.exclude_cols.append(time_col)
-#
-#                 excluded = []
-#                 for col in self.exclude_cols:
-#                     if col in all_numeric_cols:
-#                         all_numeric_cols.remove(col)
-#                         excluded.append(col)
-#                 if excluded:
-#                     print(f"已排除时间列：{excluded}")
-#
-#             self.numeric_columns = all_numeric_cols
-#
-# def _get_time_column_safely(self):
-#     """安全地获取时间列，处理未fit的情况"""
-#     if self._time_processor_checked:
-#         return
-#
-#     if not hasattr(self.time_processor, 'time_column'):
-#         print("警告：time_processor未初始化，无法获取时间列")
-#         return None
-#
-#     time_col = self.time_processor.time_column
-#     if time_col is None:
-#         print("警告：time_processor.time_column 为 None")
-#
-#     # 检查time_processor是否已经fit（通过自定义属性fitted_判断）
-#     if not hasattr(self.time_processor, 'fitted_') or not self.time_processor.fitted_:
-#         print("警告：time_processor可能未执行fit方法")
-#
-#     self._time_processor_checked = True
-#     return time_col
