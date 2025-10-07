@@ -49,6 +49,49 @@ def main():
         print("包括：清洗数据 + 划分数据集 + 构建窗口数据...")
         # STAGE_START:after_data_preparation
 
+        # 创建完整预处理管道
+        preprocessor = CompletePreprocessor()
+        preprocessor.add_data_cleaner(DataCleaner())
+        preprocessor.add_feature_engineer(SupervisedFeatureSelector(k=5))
+        preprocessor.add_feature_engineer(TargetEncodingEngineer())
+
+        # 训练数据
+        X_train = pd.DataFrame({
+            'num1': [1, 2, 2, 3, 4, 4],
+            'cat1': ['A', 'B', 'B', 'A', 'C', 'C'],
+            'num2': [1.1, 2.2, 2.2, 3.3, 4.4, 4.4]
+        })
+        y_train = pd.Series([0, 1, 1, 0, 1, 1])
+
+        print("原始数据:")
+        print(f"X: {X_train.shape}, y: {y_train.shape}")
+
+        # 训练模型
+        from sklearn.ensemble import RandomForestClassifier
+        model = RandomForestClassifier()
+        model.fit(X_processed, y_processed)
+
+        # 预测新数据
+        X_new = pd.DataFrame({
+            'num1': [2, 3, 5],
+            'cat1': ['B', 'A', 'D'],
+            'num2': [2.2, 3.3, 5.5]
+        })
+
+        X_new_processed, _ = preprocessor.transform(X_new, None)
+        predictions = model.predict(X_new_processed)
+        print(f"预测结果: {predictions}")
+
+        return model, preprocessor
+
+        # 运行示例
+        model, preprocessor = complete_workflow()
+
+
+
+
+
+
         full_pipeline =Pipeline([
             ('encode_loading',DataLoader(input_files=["data_climate.csv"],pattern = "new_*.csv",data_dir ="data")),
             ('describing',DescribeData()),
@@ -56,23 +99,39 @@ def main():
             ('remove_duplicates',RemoveDuplicates(download_config={'enabled': False})), # 不下载
             ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
             ('special_fixer',SpecialColumnsFixed(problem_columns=[])),
+
+
+
+
+
+
+
             ('identify_columns_type',ColumnsTypeIdentify()),
             # 时间列要支持周期性编码、离散特征的独热编码astype(category)、新增数值列后续的标准化
             ('timeseries_processor', ProcessTimeseriesColumns(col='Date Time', format='%d.%m.%Y %H:%M:%S',interactive=False)),
             ('othercols_processor', ProcessOtherColumns(dir_cols=['wd'], var_cols=['wv', 'max. wv'])),# vec_col 风矢量 要求顺序
             ('numeric_processor', ProcessNumericColumns(cols=[], preserve_integer_types=True,exclude_cols=['Day_sin','Day_cos','Year_sin','Year_cos'])),
-            ('categorical_processor', ProcessCategoricalColumns(cols=['Date Time'], onehot_threshold=12)),
+            ('categorical_processor', ProcessCategoricalColumns(cols=[], onehot_threshold=5)),
 
 
 
-                                .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
-                                # 初步iqr清理 + 业务异常值(目前仅处理少数物理异常)，填充后可再精细算法清理
-                                .remove_outliers(method='iqr')
-                                .handle_missing_values(cat_strategy='mode',
-                                                       num_strategy='median')  # 异常值处理前慎用均值填充 分类数据里面有季节，填mode好吗
-                                .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
+                            .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
+                            # 初步iqr清理 + 业务异常值(目前仅处理少数物理异常)，填充后可再精细算法清理
+                            .remove_outliers(method='iqr')
+                            .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
 
-        ])
+    ])
+
+        # 适合放入Pipeline的步骤：不改变样本量
+        # 填充缺失值
+        .handle_missing_values(cat_strategy='mode',
+                               num_strategy='median')  # 异常值处理前慎用均值填充 分类数据里面有季节，填mode好吗
+        # 标准化
+        # 编码分类
+        # 步骤4：特征选择（内置，保留 top 10 特征）
+        ('feature_selector', SelectKBest(score_func=f_classif, k=10)),
+        # 降维
+        # 模型
 
         # 执行pipeline
         processed_data = full_pipeline.fit_transform(X,y)
@@ -86,6 +145,10 @@ def main():
 
         .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
         .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
+
+
+
+
         .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
 
         config= [

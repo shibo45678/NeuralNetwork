@@ -312,7 +312,7 @@ class DebugController:
 #     project_root = os.path.dirname(target_file)
 #     key_files = [
 #         target_file,  # 主文件
-#         os.path.join(project_root, 'src', 'data_loader.py'),
+#         os.path.join(project_root, 'src', 'load_data.py'),
 #         os.path.join(project_root, 'src', 'model_builder.py'),
 #         os.path.join(project_root, 'src', 'utils.py'),
 #         # 添加其他重要依赖文件

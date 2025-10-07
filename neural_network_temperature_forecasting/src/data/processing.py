@@ -20,11 +20,7 @@ matplotlib.interactive(False)  # 明确关闭交互模式
 
 
 def validate_input(validate_y=True, allow_empty=False, **param_checks):
-    """输入验证装饰器
-        Args:
-            validate_y: 是否验证y参数
-            allow_empty: 是否允许空数据集（用于某些特殊场景）
-    """
+    """输入验证装饰器"""
 
     def decorator(method):
         @wraps(method)  # 保持原始函数名和文档字符串
@@ -335,7 +331,7 @@ class RemoveDuplicates(BaseEstimator, TransformerMixin):
         print(f"识别到 {duplicate_count} 行(包含唯一行和其所有重复行")
 
         path = self.download_config.get('path', './output')
-        filename = self.download_config.get('filename', 'duplicate_rows')
+        filename = self.download_config.get('filename', 'duplicate_rows.csv')
 
         if not filename.endswith('.csv'):
             filename += '.csv'
@@ -347,7 +343,7 @@ class RemoveDuplicates(BaseEstimator, TransformerMixin):
 
             # 下载重复数据
             try:
-                duplicate_rows.to_csv(file_path, index=False)
+                duplicate_rows.to_csv(file_path, index=True)
                 print(f"重复数据已下载到: {file_path}")
                 self._has_downloaded = True
             except Exception as e:
@@ -754,7 +750,7 @@ class TimeTypeConverter:
         return sample.is_monotonic_increasing  # Pandas属性 数据太少可能无法判断。允许相等
 
     def _common_cv_pattern(self, series):
-        """检查是否具有等时间间隔均匀采样模式(变异系数 相对离散程度)
+        """检查是否具有等时间间隔均匀采样模式(变异系数 相对离散程度) --基于标准差和均值
             整体CV < 0.3，整数CV < 0.5"""
         sample = series.head(50)
         integer_parts = sample.astype(int)
@@ -830,19 +826,20 @@ class TimeTypeConverter:
 
     def _cv_pattern_median_based(self, series):
         sample = series.head(50)
+        # 中位数对样本要求很低 一个样本都可以算
 
         if len(sample) <= 1:
             return False
         diffs = sample.diff().dropna()
 
-        if len(diffs) < 2:
+        if len(diffs) < 2:  # 如果只有2个样本，出来1个diff，中位数是自己，mad计算至少2个稳定（robust_cv =0 也满足条件）。所以至少2个diffs,样本数3
             return False
 
         median_diff = diffs.median()
-        if median_diff == 0:
+        if median_diff == 0:  # 防除零
             return False
 
-        # 基于中位数的“变异系数”
+        # 基于中位数的“变异系数”, MAD计算需要至少2个值才有意义
         mad = (diffs - median_diff).abs().median()  # 中位数绝对偏差
         robust_cv = mad / median_diff
 
@@ -1016,6 +1013,9 @@ class ProcessTimeseriesColumns(BaseEstimator, TransformerMixin):
 
         # add 周期编码时间列 （转换为Unix时间戳秒数,datetime64每个元素都是timestamp实例）
         self._cyclic_encoding(df=X_, col=self.time_column)
+
+        # 再确认位置索引和排序(方便后面异常值标记）
+        X_ = X_.sort_values(self.time_column, ascending=True, ignore_index=True)
 
         try:
             viz = Visualization()  # 将转换结果可视化
@@ -1658,142 +1658,168 @@ class ProcessCategoricalColumns(BaseEstimator, TransformerMixin):
         return df
 
 
-
-"""查看数值列异常值(3种方式)"""
-
+"""查看数值列异常值(2种方式)"""
 
 
-def check_extreme_features(self, method: Dict = None):  # z = (x - μ) / σ 单位标准差 >=3个标准差算异常
-    print("查看数值列异常值...")
-    """使用IQR或Z-score或ISO方法标记异常值
-        method : Dict, optional
-            检测方法配置，默认使用Z-score
-            Example: or {'name': 'zscore', 'threshold': 3}
-                     or {'name':'zscore','threshold':3}
-                     or {'name':'multivariate','contamination':0.025}
-    """
-    if method is None:
-        print("不查看异常值")
+class CheckExtreFeatures(BaseEstimator, TransformerMixin):
+    def __init__(self, method_config: Optional[Dict[str, Union[int, str, float]]] = None):
+        if method_config is None:
+            self.method_config = {'method': 'iqr', 'threshold': 1.5}
+        else:
+            self.method_config = dict(method_config)
 
-    if method['name'] == 'zscore':  # {'name':'zscore','threshold':3}
-        """使用Z-score方法标记每列异常值"""
-        df = self.origin_df.copy()
-        print(f"检测数值列异常值(zscore)...")
+        self.stats_ = {}
+        self.numeric_columns = []
+        self.outliers_details = pd.DataFrame()
+        self.outliers_info = []  # 逐列的异常信息
 
-        all_outliers_list = []
+    @validate_input(validate_y=False)
+    def fit(self, X, y=None):
+        """使用IQR或Z-score或ISO方法标记异常值
+                检测方法配置，默认使用iqr
+                Example: or {'name': 'iqr', 'threshold': 1.5}
+                         or {'name':'zscore','threshold':3}
+        """
+        self.method = self.method_config.get('method', 'iqr').lower()
+
+        if self.method not in ['iqr', 'zscore']:
+            print(f"不支持的异常值查看方法：{self.method}。使用默认iqr(阈值1.5)的配置查看。")
+            self.method = 'iqr'
+            self.threshold = 1.5
+
+        else:
+            threshold = self.method_config.get('threshold')
+            if threshold is None:
+                threshold_map = {'zscore': 3, 'iqr': 1.5, }
+                self.threshold = threshold_map.get(self.method)
+            else:
+                self.threshold = threshold
+            print(f"将使用{self.method}方法标记每列异常值，阈值{self.threshold}")
+
+        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
+
+        # 每列的分位数或均值和标准差
+        self.numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+
         for col in self.numeric_columns:
             clean_series = df[col].dropna()
-            z_scores = np.abs(stats.zscore(clean_series))
-            outlier_mask = (z_scores >= method['threshold'])
-            # 获取异常值的索引
-            outlier_indices = clean_series.index[outlier_mask]  # 保持一致 dropna
+            if len(clean_series) < 2:
+                print(f"列{col}数据不足，跳过所有方法统计")
+                continue
 
-            if len(outlier_indices) > 0:
-                outlier_df = (df.loc[outlier_indices].copy()
-                              .assign(outlier_source=col,
-                                      z_score=z_scores[outlier_mask],
-                                      original_index=outlier_indices))
+            if self.method == 'zscore':
+                self.stats_[col] = {
+                    'mean': clean_series.mean(),
+                    'std': clean_series.std(),
+                    'method': 'zscore'
+                }
+            elif self.method == 'iqr':
+                if len(clean_series) < 4:
+                    print(f"列{col}数据不足，跳过iqr方法统计")
+                    continue
 
-                all_outliers_list.append(outlier_df)
-                print(f"列'{col}':检测到{len(outlier_df)}个异常值")
-            else:
-                print(f"列'{col}':未检测到异常值")
+                q1, q3 = clean_series.quantile([0.25, 0.75])
+                iqr = q3 - q1
+                self.stats_[col] = {
+                    'q1': q1,
+                    'q3': q3,
+                    'iqr': iqr,
+                    'method': 'iqr'
+                }
+                if iqr == 0:  # 仅提示
+                    # 数据高度集中 - 大部分值相同，只有少数离群点；常数列中的少数异常值
+                    print(f"列'{col}': iqr为0，数据高度集中，大部分值相同，只有少数离群值")
 
-        # 一次合并所有结果
-        if all_outliers_list:
-            all_outliers = pd.concat(all_outliers_list, ignore_index=True)
-
-            # 一列多个异常结果合并
-            result_df = (all_outliers.groupby(self.numeric_columns)
-                         .agg(extreme_tag=('outlier_source', list),  # 按照所有列聚合后，统计某行数据的异常来源
-                              abnormal_count=('outlier_source', 'count'),
-                              original_index=('original_index', 'first'))
-                         )
-            # result_df.to_csv("extreme_features_zscore.csv")
-        else:
-            all_outliers = pd.DataFrame()
-            print("所有列都未检查到异常值zscore")
-
-        self.history.append("检测数值列异常值(zscore)")
         return self
 
-    if method['name'] == 'iqr':
-        """使用IQR方法标记每列异常值"""
-        df = self.origin_df.copy()
-        print(f"检测数值列异常值(iqr)...")
+    @validate_input(validate_y=True)
+    def transform(self, X, y=None):  # 将异常值替换为NaN，或者整体标记异常值（多列）
+        if not hasattr(self, 'stats_'):
+            raise ValueError("请先调用fit方法进行配置")
+
+        print("标记或替换NaN数值列的异常值...")
+        X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
 
         all_outliers_list = []
-        for col in self.numeric_columns:
-            clean_series = df[col].dropna()
-            if len(clean_series) >= 4 and len(clean_series.unique()) >= 4:  # 默认inplace=False
-                try:
-                    Q1, Q3 = clean_series.quantile([0.25, 0.75])
-                    IQR = Q3 - Q1
-                    if IQR == 0:  # 所有值相同
-                        print(f"警告: 列 {col} 的IQR为0，可能所有值都相同")
-                        continue
+        outliers_info = []
 
-                    lower_bound = Q1 - method['threshold'] * IQR
-                    upper_bound = Q3 + method['threshold'] * IQR
-                    outlier_mask = (clean_series < lower_bound) | (clean_series > upper_bound)  # 或
-                    outlier_indices = clean_series.index[outlier_mask]
+        for col, stats in self.stats_.items():
+            if col not in X_.columns:
+                continue
 
-                    if np.any(outlier_mask):  # sum() > 0 非最语义化,性能差，需要计算所有值的和
-                        outlier_df = (df.loc[outlier_indices].copy()
-                                      .assign(outlier_source=col,
-                                              original_index=outlier_indices))  # 原始索引取出便于后续修改
+            clean_series = X_[col].dropna()
+            if len(clean_series) < 2:
+                continue
+            if stats is None:
+                continue
 
-                        all_outliers_list.append(outlier_df)
-                        print(f"列'{col}':检测到{len(outlier_df)}个异常值")
-                    else:
-                        print(f"列'{col}':未检测到异常值")
+            if stats['method'] == 'zscore':
+                z_scores = np.abs((clean_series - stats['mean']) / stats['std'])
+                outlier_mask = (z_scores >= self.threshold)
 
-                except Exception as e:
-                    print(f"计算列 {col} 的IQR时出错: {e}")
+                # 集中获取异常信息
+                self._collect_extre_features(df=X_, col=col, series=clean_series, mask=outlier_mask,
+                                             scores=z_scores,
+                                             outliers_list=all_outliers_list,  # 列表当参数传进去，里面append
+                                             info_list=outliers_info)
 
-            else:
-                print(f"列'{col}':唯一值样本数不足4个，IQR判断不适用，需要改用其他方法判断")
+            if stats['method'] == 'iqr':
+                if len(clean_series) < 4:
+                    continue
+                iqr = stats['iqr']
+                lower_bound = stats['q1'] - self.threshold * iqr
+                upper_bound = stats['q3'] + self.threshold * iqr
+                outlier_mask = (clean_series < lower_bound) | (clean_series > upper_bound)  # 或
 
-        # 一次合并所有结果
-        if all_outliers_list:
-            all_outliers = pd.concat(all_outliers_list, ignore_index=True)
+                # 集中获取异常信息
+                self._collect_extre_features(df=X_, col=col, series=clean_series, mask=outlier_mask,
+                                             scores=clean_series,  # iqr没score标准就是series本身的值
+                                             outliers_list=all_outliers_list,
+                                             info_list=outliers_info)
 
-            # 一列多个异常结果合并
-            result_df = (all_outliers.groupby(self.numeric_columns)
-                         .agg(extreme_tag=('outlier_source', list),
-                              abnormal_count=('outlier_source', 'count'),
-                              original_index=('original_index', 'first')))
-            # result_df.to_csv("extreme_features_iqr.csv")
+        # 合并2个列表的所有遍历结果  判断异常
+        self.outliers_info = outliers_info
+        self.outliers_details = self._format_results(outliers_list=all_outliers_list)
+
+        # 整体异常值标记：any数值列有异常都标记（暂时）
+        outliers_mask= np.zeros(X_.shape[0], dtype=bool)
+        if not self.outliers_details.empty:
+            outliers_mask[self.outliers_details.index] = True # groupby的分组列就是index ('original_index',防止reset_index改名）
+            X_['is_outliers'] = outliers_mask # 可以作为新特征
+
+        if y is not None:
+            return X_, y
+
+        return X_
+
+    def _collect_extre_features(self, df, col, series, mask, scores, outliers_list, info_list):
+        """收集异常值信息"""
+        outlier_indices = series.index[mask]  # 保持一致 dropna 后续合并
+
+        if mask.any():
+            outlier_df = (df.loc[outlier_indices].copy()
+                          .assign(outlier_source=col,
+                                  score=scores[mask],
+                                  original_index=outlier_indices))
+
+            outliers_list.append(outlier_df)
+            info_list.append(
+                {'column': col,
+                 'method': self.method,
+                 'outlier_count': len(outlier_df),
+                 'thredshold': self.threshold})
+
+    def _format_results(self, outliers_list):
+        # 格式化返回（concat列表里面所有的df)
+        if outliers_list:
+            df = pd.concat(outliers_list, ignore_index=True)
+            outlier_source = (df.groupby('original_index')
+                              .agg(extreme_tag=('outlier_source', list),  # 按照所有列聚合后，统计某行数据的所有异常来源
+                                   extreme_score=('score', list)))
+            return outlier_source
         else:
-            all_outliers = pd.DataFrame()
+            return pd.DataFrame()
 
-        self.history.append("检测数值列异常值(iqr)")
-        return self
-
-    if method['name'] == 'multivariate':  # {'name':'multivariate','contamination':0.025}
-        """多变量联合异常检测
-           多变量联合分析，不是逐列处理
-           某个点可能单个特征正常，但多个特征的组合异常"""
-        df = self.origin_df.copy()
-        print(f"检测联合异常值(iso_forest)...")
-
-        from sklearn.ensemble import IsolationForest
-        # 1.使用隔离森林检测整体异常
-        iso_forest = IsolationForest(
-            contamination=method['contamination'],  # 预期异常比例 ≈2.5%
-            random_state=42
-        )
-        outliers = iso_forest.fit_predict(df[self.numeric_columns])
-
-        # 2.标记异常点
-        df['is_outlier'] = outliers == -1
-        print(f"检测到{df['is_outlier'].sum()}个多变量异常点")
-        outliers_indices = df.index[outliers == -1]
-        result_df = df.loc[outliers_indices]
-        # result_df.to_csv("extreme_features_isoforest.csv")
-
-        self.history.append("检测数值列异常值(iso_forest)")
-        return self
 
 
 """=============================================== 极端数据 ============================================="""
@@ -1889,7 +1915,6 @@ def remove_outliers(self, method: Dict = None, target_col: str = None) -> 'DataP
         return self
 
 
-
 """处理缺失值"""
 
 
@@ -1956,9 +1981,6 @@ def handle_missing_values(self,
 
     self.history.append('处理缺失值')
     return self
-
-
-
 
 
 """=============================================== 抽样数据 ============================================="""
