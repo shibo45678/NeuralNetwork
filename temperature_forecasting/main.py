@@ -115,10 +115,17 @@ def main():
 
 
 
-                            .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
-                            # 初步iqr清理 + 业务异常值(目前仅处理少数物理异常)，填充后可再精细算法清理
-                            .remove_outliers(method='iqr')
-                            .remove_outliers(method='custom')  # 目前仅处理了少数物理异常
+           .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
+            .handle
+            method_config_complex = [
+                ('minmax', {'feature_range': [(0, 100), (0, 200), (0, 300)],
+                            'columns': ['age', 'height', 'weight']}),
+                ('zscore', {'threshold': 2.5, 'columns': ['income', 'score']}),
+                ('iqr', {'threshold': 1.5, 'columns': ['temperature']}),
+                ('robust', {'quantile_range': (5, 95), 'columns': ['pressure']}),
+                ('isolationforest', {'contamination': 0.1, 'columns': ['income']}),  # 注意：income会重复检测
+            ]
+
 
     ])
 
