@@ -32,7 +32,7 @@ def test_categorical_processor_focus():
                    ] * 27
 
     # 确保所有列表长度相同（取最小长度）
-    min_length = min(len(nan_variations), len(similarity_test), len(boolean_test))
+    min_length = min(len(nan_variations),len(similarity_test), len(boolean_test))
 
     test_data = {
         'nan_variations': nan_variations[:min_length],
@@ -62,7 +62,7 @@ def test_categorical_processor_focus():
         print(f"  '{val}': {count}")
 
     # 应用清洗
-    df_cleaned, _ = processor.clean_categorical_data(df, strategy='consolidate')
+    df_cleaned = processor.clean_categorical_data(df, strategy='consolidate')
 
     print("\n清洗后 nan 相关值分布:")
     nan_cleaned = df_cleaned['nan_variations'].value_counts(dropna=False)
@@ -73,7 +73,7 @@ def test_categorical_processor_focus():
             print(f"  '{val}': {count}")
 
     # 检查 nan 标准化效果
-    nan_variants = ['nan', 'NaN', 'NAN', 'NULL', 'null', 'N/A', 'None', '', ' ']
+    nan_variants = ['nan', 'NaN', 'NAN', 'Nan', 'NULL', 'null', 'Null', 'nUll', 'N/A', 'n/a', 'None', 'none', 'NONE', '', ' ', '  ',]
     nan_count_original = df['nan_variations'].isin(nan_variants).sum()
     nan_count_cleaned = df_cleaned['nan_variations'].isna().sum()
 
@@ -121,33 +121,34 @@ def test_categorical_processor_focus():
 
     # 7. 测试修正映射
     print("\n7. 修正映射检查...")
-    for col, correction_map in processor.correction_mappings_.items():
+    for col, correction_map in processor.correction_mappings_.items(): # 两个不同列存了同样的结果
         print(f"\n{col} 列的修正映射 (共{len(correction_map)}个):")
 
-        # 显示 nan 相关的修正
-        nan_corrections = {}
-        for wrong, correct in correction_map.items():
-            wrong_str = str(wrong).lower()
-            if any(nan_var in wrong_str for nan_var in ['nan', 'null', 'none', 'n/a', '']):
-                nan_corrections[wrong] = correct
+        if col == 'nan_variations':# 显示 nan 相关的修正
+            nan_corrections = {}
+            for wrong, correct in correction_map.items():
+                wrong_str = str(wrong).lower()
+                if any(nan_var in wrong_str for nan_var in ['nan', 'NaN', 'NAN', 'Nan', 'NULL', 'null', 'Null', 'nUll',
+                         'N/A', 'n/a', 'None', 'none', 'NONE', '', ' ', '  ']):
+                    nan_corrections[wrong] = correct
 
-        if nan_corrections:
-            print("  NaN相关修正:")
-            for wrong, correct in list(nan_corrections.items())[:5]:
-                print(f"    '{wrong}' → {correct}")
+            if nan_corrections:
+                print("  NaN相关修正:")
+                for wrong, correct in list(nan_corrections.items())[:5]:
+                    print(f"    '{wrong}' → {correct}")
 
         # 显示其他修正（最多显示5个）
-        other_corrections = {k: v for k, v in correction_map.items()
-                             if k not in nan_corrections}
-        if other_corrections:
-            print("  其他修正:")
-            count = 0
-            for wrong, correct in other_corrections.items():
-                if count < 5:
-                    print(f"    '{wrong}' → '{correct}'")
-                    count += 1
-            if len(other_corrections) > 5:
-                print(f"    ... 还有 {len(other_corrections) - 5} 个其他修正")
+        else:
+            other_corrections = {k: v for k, v in correction_map.items()}
+            if other_corrections:
+                print("  其他修正:")
+                count = 0
+                for wrong, correct in other_corrections.items():
+                    if count < 5:
+                        print(f"    '{wrong}' → '{correct}'")
+                        count += 1
+                if len(other_corrections) > 5:
+                    print(f"    ... 还有 {len(other_corrections) - 5} 个其他修正")
 
     # 8. 验证清洗效果
     print("\n8. 清洗效果验证...")

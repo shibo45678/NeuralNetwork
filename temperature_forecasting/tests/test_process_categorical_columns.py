@@ -1,3 +1,11 @@
+import sys
+import os
+
+# 添加 src 到路径
+project_root = '/Users/shibo/Python/NeuralNetwork/temperature_forecasting'
+src_path = os.path.join(project_root, 'src')
+sys.path.insert(0, src_path)
+
 # 测试代码
 import pandas as pd
 import numpy as np
