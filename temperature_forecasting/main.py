@@ -180,6 +180,11 @@ def main():
                         var_name='Column', value_name='normalized',  # Standardized
                         title="统计分布小提琴图")
 
+
+
+
+
+
         """构建窗口数据"""
         # 1 使用WindowGenerator类实例 构造窗口数据
         df_train = preprocessor.get_train_val_test_data()[0]
@@ -365,7 +370,53 @@ def main():
 if __name__ == "__main__":
     main()
 
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.feature_selection import SelectKBest
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
 
+# 1. 加载数据
+X, y = load_your_data()
+
+
+# ✅ 推荐：先分割，再分别处理
+X_train, X_val, X_test, y_train, y_val, y_test = splitter.split(X, y)
+
+# 然后为每个数据集创建独立的pipeline
+train_pipeline = Pipeline([...])
+train_pipeline.fit(X_train, y_train)
+
+
+# 2. 创建特征工程Pipeline
+feature_pipeline = Pipeline([
+    ('imputer', SimpleImputer(strategy='median')),
+    ('scaler', StandardScaler()),
+    ('feature_selector', SelectKBest(k=15))
+])
+
+# 3. 应用特征工程
+print("进行特征工程...")
+X_processed = feature_pipeline.fit_transform(X, y)
+
+
+
+print(f"训练集: {X_train.shape[0]} 样本")
+print(f"验证集: {X_val.shape[0]} 样本")
+print(f"测试集: {X_test.shape[0]} 样本")
+
+# 5. 训练模型
+print("训练模型...")
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# 6. 评估模型
+val_pred = model.predict(X_val)
+test_pred = model.predict(X_test)
+
+print(f"验证集准确率: {accuracy_score(y_val, val_pred):.4f}")
+print(f"测试集准确率: {accuracy_score(y_test, test_pred):.4f}")
 
 
     
