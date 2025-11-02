@@ -1,23 +1,53 @@
-from sklearn.pipeline import Pipeline
 from src.data.processing import (DataLoader,DescribeData,DeleteUselessCols,RemoveDuplicates,ProblemColumnsFixed,SpecialColumnsFixed,
                                  ColumnsTypeIdentify,ProcessTimeseriesColumns,ProcessNumericColumns,
                                  ProcessCategoricalColumns,ProcessOtherColumns,)
 from src.data.exploration import Visualization
-from src.utils.windows import WindowGenerator
+from data.windows import WindowGenerator
 from src.models.cnn import CnnModel
 from src.models.lstm import LstmModel
 from src.training.training_models import TrainingModel
 from src.evaluation.metrics import evaluate_model
 from .trained.trained import ReconstructPredictor
 from src.utils.config import TensorFlowConfig
-import time
 import matplotlib.pyplot as plt
 from src.utils.debug_controller import DebugController
-import os
-import sys
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
+
 
 # sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+# main.py
+from industrial_system import IndustrialMLSystem
+import pandas as pd
+
+
+def main():
+    # 配置参数
+    config = {
+        'data_path': 'data/raw_data.csv',
+        'model_save_path': 'models/production_model.pkl'
+    }
+
+    # 初始化系统
+    ml_system = IndustrialMLSystem()
+
+    # 加载数据
+    data = pd.read_csv(config['data_path'])
+    X = data.drop('target', axis=1)
+    y = data['target']
+
+    # 训练系统
+    ml_system.train(X, y)
+
+    # 保存模型
+    ml_system.save(config['model_save_path'])
+
+    print("系统训练完成并已保存")
+
+
+if __name__ == "__main__":
+    main()
+
+
 
 
 def main():
@@ -418,5 +448,9 @@ test_pred = model.predict(X_test)
 print(f"验证集准确率: {accuracy_score(y_val, val_pred):.4f}")
 print(f"测试集准确率: {accuracy_score(y_test, test_pred):.4f}")
 
-
+pipeline = Pipeline([
+    ('splitter', CommonSplitter(shuffle=True, random_state=42)),
+    ('scaler', StandardScaler()),
+    ('classifier', LogisticRegression(random_state=42))
+])
     

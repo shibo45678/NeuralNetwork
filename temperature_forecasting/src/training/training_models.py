@@ -9,10 +9,11 @@ def TrainingModel(model_name:str,
                 model,  # tf.keras.models
                 trainset,
                 valset,
+                weights_path,
                 epochs: int = 20, # 总轮数
-                verbose: int = 2):
+                verbose: int = 2,
+                ):
 
-    weights_path = f"best_model_{model_name}_weights.h5"
 
     record = model.fit(
         trainset,  # x,y
@@ -52,7 +53,7 @@ def TrainingModel(model_name:str,
     # record.history 为字典对象，包含训练过程中的loss的测量指标等记录项
     history_plot(history=record, model_name=model_name)
 
-    return record, weights_path
+    return record
 
 
 

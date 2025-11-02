@@ -2,9 +2,6 @@ import pytest
 import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import GridSearchCV
-from sklearn.base import BaseEstimator, TransformerMixin
 import sys
 import os
 
@@ -37,8 +34,8 @@ class TestTimeSeriesSplitter:
         """测试使用默认参数初始化"""
         splitter = TimeSeriesSplitter()
 
-        assert splitter.train_size == 0.7
-        assert splitter.val_size == 0.2
+        assert splitter.train_size == 0.6
+        assert splitter.val_size == 0.3
         assert splitter.test_size == 0.1
         assert splitter.shuffle == False
         assert splitter.random_state is None
@@ -168,7 +165,7 @@ class TestCommonSplitter:
 
         # 验证数据标签对齐
         for idx in range(len(X_shuffled)):
-            original_idx = X.index[X['feature1'] == X_shuffled.iloc[idx]['feature1']][0]
+            original_idx = X.index[X['feature1'] == X_shuffled.iloc[idx]['feature1']][0] # 取第一个匹配的索引
             assert y_shuffled.iloc[idx] == y.iloc[original_idx]
 
     def test_shuffle_numpy_array(self):
@@ -212,7 +209,10 @@ class TestCommonSplitter:
         """测试带打乱的pandas数据分割"""
         X = pd.DataFrame({'feature': [1, 2, 3, 4, 5]})
         y = pd.Series([10, 20, 30, 40, 50])
-        splitter = CommonSplitter(shuffle=True, random_state=42)
+        splitter = CommonSplitter(shuffle=True, random_state=42).set_params(
+            train_size =0.6,val_size=0.2,test_size=0.2
+        )
+
 
         X_train, X_val, X_test, y_train, y_val, y_test = splitter.split(X, y)
 
@@ -302,7 +302,7 @@ class TestEdgeCases:
         y = np.array([0])
         splitter = CommonSplitter()
 
-        with pytest.raises(Exception):  # 应该处理单样本情况
+        with pytest.raises(Exception):  # 期望分割器能抛出异常，而不是静默处理
             splitter.split(X, y)
 
     def test_empty_data(self):
