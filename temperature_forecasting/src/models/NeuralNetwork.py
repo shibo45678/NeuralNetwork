@@ -98,7 +98,7 @@ class OutputConfig(BaseModel):
 # weights_path f"best_model_{model_name}_weights.h5"
 # time_col_name
 
-class MultiTaskTimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
+class TimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
     def __init__(self, output_configs, **kwargs):  # 标准化
         """
         参数说明：
@@ -168,14 +168,14 @@ class MultiTaskTimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixi
         self.feature_columns_num =
         self.feature_columns_cat =
 
-        # 2. 分割数据集
-        train_X, val_X, = self._split_dataset(X)
-
-        # 3. 内置标准化 + 编码
-        train_X_scaled = self._fit_transform_scaler(train_X)
-        val_X_scaled = self.  # 应用transform
-        test_X_scaled =
-        # 目前顺序就是原来的顺序 并没有将数值和分类分开
+        # # 2. 分割数据集
+        # train_X, val_X, = self._split_dataset(X)
+        #
+        # # 3. 内置标准化 + 编码
+        # train_X_scaled = self._fit_transform_scaler(train_X)
+        # val_X_scaled = self.  # 应用transform
+        # test_X_scaled =
+        # # 目前顺序就是原来的顺序 并没有将数值和分类分开
 
         # 4. 创建窗口数据
         self.window_generator_ = self._create_window_generator()

@@ -1,12 +1,12 @@
-
 import pandas as pd
 import numpy as np
+
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', 1000)
 
-from data.data_cleaner.handle_missing_values import (BaseMissingValueHandler,NumericMissingValueHandler,CategoricalMissingValueHandler,
-        ComprehensiveMissingValueHandler,BusinessAwareMissingHandler)
-
+from data.data_preparation.handle_missing_values import (BaseMissingValueHandler, NumericMissingValueHandler,
+                                                         CategoricalMissingValueHandler,
+                                                         ComprehensiveMissingValueHandler, BusinessAwareMissingHandler)
 
 
 # 模拟辅助类（为了测试）
@@ -83,10 +83,10 @@ class TestMissingValueHandler:
         # 测试数值处理器
         numeric_config = {
             'spec_fill': [
-                ('constant', {'columns': ['age'], 'fill_value': [30]}),
-                ('median', {'columns': ['salary']})
+                {'constant': {'columns': ['age'], 'fill_value': [30]}},
+                {'median': {'columns': ['salary']}}
             ],
-            'smart_fill_remain': True # smart功能支持整体填充
+            'smart_fill_remain': True  # smart功能支持整体填充
         }
 
         numeric_imputer = NumericMissingValueHandler(numeric_config)
@@ -118,11 +118,11 @@ class TestMissingValueHandler:
 
         config = {
             'spec_fill': [
-                ('mean', {'columns': ['age']}),
-                ('median', {'columns': ['score']})
+                {'mean': {'columns': ['age']}},
+                {'median': {'columns': ['score']}}
             ],
             'smart_fill_remain': False,
-            'important_columns': ['user_id', 'transaction_id'] # 重要列出现没有填充必要的情况 没缺失
+            'important_columns': ['user_id', 'transaction_id']  # 重要列出现没有填充必要的情况 没缺失
         }
 
         imputer = NumericMissingValueHandler(config)
@@ -154,7 +154,7 @@ class TestMissingValueHandler:
 
         config = {
             'spec_fill': [
-                ('mean', {'columns': ['age']})
+                {'mean':{'columns': ['age']}}
             ],
             'skip_fill': ['income'],  # 跳过income列
             'smart_fill_remain': True
@@ -187,7 +187,7 @@ class TestMissingValueHandler:
 
         config = {
             'spec_fill': [
-                ('mode', {'columns': ['department']})
+                {'mode': {'columns': ['department']}}
             ],
             'smart_fill_remain': True
         }
@@ -220,15 +220,15 @@ class TestMissingValueHandler:
 
         numeric_config = {
             'spec_fill': [
-                ('mean', {'columns': ['age']}),
-                ('median', {'columns': ['salary']})
+                {'mean': {'columns': ['age']}},
+                {'median': {'columns': ['salary']}}
             ],
             'smart_fill_remain': False
         }
 
         categorical_config = {
             'spec_fill': [
-                ('mode', {'columns': ['department']})
+                {'mode': {'columns': ['department']}}
             ],
             'skip_fill': ['city'],  # 跳过city列
             'smart_fill_remain': True
@@ -268,11 +268,11 @@ class TestMissingValueHandler:
 
         try:
             imputer = NumericMissingValueHandler({
-                'spec_fill': [('constant', {'columns': ['col1'], 'fill_value': [0]})],
+                'spec_fill': [{'constant': {'columns': ['col1'], 'fill_value': [0]}}],
                 'smart_fill_remain': True
             })
             result = imputer.fit_transform(empty_df)
-            print("全空数据处理成功") # 全空抛出
+            print("全空数据处理成功")  # 全空抛出
         except Exception as e:
             print(f"全空数据处理: {e}")
 
@@ -282,7 +282,7 @@ class TestMissingValueHandler:
         no_missing_df = pd.DataFrame(no_missing_data)
 
         imputer = NumericMissingValueHandler({
-            'spec_fill': [('mean', {'columns': ['col1']})],
+            'spec_fill': [{'mean': {'columns': ['col1']}}],
             'smart_fill_remain': True
         })
         result = imputer.fit_transform(no_missing_df)
@@ -298,7 +298,7 @@ class TestMissingValueHandler:
             imputer = NumericMissingValueHandler(invalid_config)
             imputer.fit(empty_df)
         except ValueError as e:
-            print(f"配置验证正确捕获错误: {e}") # 配置未报错
+            print(f"配置验证正确捕获错误: {e}")  # 配置未报错
 
         print("✅ 边界情况测试通过")
 
@@ -338,7 +338,7 @@ class TestMissingValueHandler:
         print(f"skewed_col 填充值: {imputer.columns_info['skewed_col'][0]['fill_value']}")
         print("缺失值统计:", result.isna().sum())
 
-        assert result['normal_col'].isna().sum() == 0 # 智能填充只覆盖15%
+        assert result['normal_col'].isna().sum() == 0  # 智能填充只覆盖15%
         assert result['skewed_col'].isna().sum() == 0
         print("✅ 智能填充逻辑测试通过")
 
@@ -357,7 +357,7 @@ class TestMissingValueHandler:
 
         config = {
             'spec_fill': [
-                ('mean', {'columns': ['important_col', 'high_missing_col', 'normal_col']})
+                {'mean': {'columns': ['important_col', 'high_missing_col', 'normal_col']}}
             ],
             'smart_fill_remain': False,
             'important_columns': ['important_col']
@@ -368,7 +368,7 @@ class TestMissingValueHandler:
         result = imputer.transform(df)
 
         print("缺失指示器测试结果:")
-        print("缺失指示器列表:", imputer.missing_indicator) # normal_col不缺失的列在缺失指示器内
+        print("缺失指示器列表:", imputer.missing_indicator)  # normal_col不缺失的列在缺失指示器内
         print("重要列列表:", imputer.get_important_features(df))
         # 验证缺失指示器列存在
         assert 'important_col_missing_indicator' in result.columns

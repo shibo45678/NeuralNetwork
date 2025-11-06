@@ -4,6 +4,8 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from functools import wraps
 from sklearn.utils import check_array
 
+from data.decorator import cache_download
+
 
 # 复制您的装饰器代码
 def validate_input(validate_y=True, allow_empty=False, **param_checks):
@@ -62,11 +64,19 @@ def validate_input(validate_y=True, allow_empty=False, **param_checks):
 
 # 复制您的 CheckExtreFeatures 类代码
 class CheckExtreFeatures(BaseEstimator, TransformerMixin):
-    def __init__(self, method_config=None):
+    def __init__(self, method_config=None,download_config =None):
         if method_config is None:
             self.method_config = {'method': 'iqr', 'threshold': 1.5}
         else:
             self.method_config = dict(method_config)
+
+        if download_config is None:
+            self.download_config = {
+                'enabled': True,
+                'path': '~/Python/NeuralNetwork/temperature_forecasting/data/intermediate',
+                'filename': 'outliers.csv'}
+        else:
+            self.download_config = dict(download_config)
 
         self.stats_ = {}
         self.numeric_columns = []
@@ -207,6 +217,12 @@ class CheckExtreFeatures(BaseEstimator, TransformerMixin):
         else:
             return pd.DataFrame()
 
+    @cache_download
+    def download_outliers(self):
+        if not hasattr(self, 'outliers_details') or self.outliers_details is None:
+            print("没有异常值数据可下载")
+            return None
+        return self.outliers_details
 
 # 修复后的测试函数
 def test_check_extre_features():
@@ -245,6 +261,7 @@ def test_check_extre_features():
     try:
         X_transformed_iqr = detector_iqr.fit_transform(df)
         print("✓ IQR 检测器成功运行")
+        detector_iqr.download_outliers()
         print(f"检测到异常值数量: {X_transformed_iqr['is_outliers'].sum()}")
         print(f"异常值详情形状: {detector_iqr.outliers_details.shape}")
         if not detector_iqr.outliers_details.empty:
@@ -280,10 +297,9 @@ def test_check_extre_features():
     print("\n测试 3: 带目标变量 y")
     try:
         detector_with_y = CheckExtreFeatures()
-        X_transformed, y_returned = detector_with_y.fit_transform(df, y)
+        X_transformed= detector_with_y.fit_transform(df, y)
         print("✓ 带 y 参数检测器成功运行")
         print(f"返回的 X 形状: {X_transformed.shape}")
-        print(f"返回的 y 形状: {y_returned.shape}")
         print(f"检测到异常值数量: {X_transformed['is_outliers'].sum()}")
     except Exception as e:
         print(f"✗ 带 y 参数检测器失败: {e}")

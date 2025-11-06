@@ -1,15 +1,9 @@
-import sys
-import os
 
-# 添加 src 到路径
-project_root = '/Users/shibo/Python/NeuralNetwork/temperature_forecasting'
-src_path = os.path.join(project_root, 'src')
-sys.path.insert(0, src_path)
 
 # 测试代码
 import pandas as pd
 import numpy as np
-from data.processing import ProcessCategoricalColumns
+from data.feature_engineering.process_categorical_cols import ProcessCategoricalColumns
 from sklearn.pipeline import Pipeline
 
 
@@ -50,7 +44,7 @@ def test_process_categorical_columns():
     # 测试场景1：自动检测分类列
     print("测试场景1: 自动检测分类列")
     print("-" * 30)
-    processor1 = ProcessCategoricalColumns(cols=None, onehot_threshold=5)
+    processor1 = ProcessCategoricalColumns(cols=None)
     result1 = processor1.fit_transform(test_data)
     print(f"处理后的数据形状: {result1.shape}")
     print(f"处理后的数据列: {result1.columns.tolist()}")
@@ -62,7 +56,7 @@ def test_process_categorical_columns():
     # 测试场景2：指定要处理的列
     print("测试场景2: 指定处理列")
     print("-" * 30)
-    processor2 = ProcessCategoricalColumns(cols=['season', 'weather'], onehot_threshold=5)
+    processor2 = ProcessCategoricalColumns(cols=['season', 'weather'])
     result2 = processor2.fit_transform(test_data)
     print(f"处理后的数据形状: {result2.shape}")
     print(f"处理后的数据列: {result2.columns.tolist()}")
@@ -74,8 +68,7 @@ def test_process_categorical_columns():
     print("-" * 30)
     pipeline = Pipeline([
         ('categorical_processor', ProcessCategoricalColumns(
-            cols=['season', 'weather','city', 'Date Time'],
-            onehot_threshold=4
+            cols=['season', 'weather','city', 'Date Time']
         ))
     ])
 

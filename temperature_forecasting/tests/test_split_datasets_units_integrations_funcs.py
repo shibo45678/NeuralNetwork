@@ -8,7 +8,7 @@ import os
 # 添加模块路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from data.feature_engineer.split_datasets import TimeSeriesSplitter, CommonSplitter
+from data.feature_engineering.split_datasets import TimeSeriesSplitter, CommonSplitter
 
 
 class TestTimeSeriesSplitter:

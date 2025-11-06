@@ -141,7 +141,6 @@ class ModelEvaluation:
 
             for i, (task_name, config) in enumerate(self.output_configs.items()):
                 if i < len(predictions):
-                    task_type = config['type']
                     pred = predictions[i]  # 第i个输出层的预测
                     true = true_labels[:, :, i]  # 从合并标签中提取对应任务
                     task_results[task_name] = self._analyze_single_task(pred, true, config, task_name)
@@ -201,7 +200,7 @@ class ModelEvaluation:
 
     def _analyze_binary_classification_task(self, predictions: np.ndarray,
                                             true_values: np.ndarray,
-                                            task_name: str) -> Dict:
+                                            ) -> Dict:
         """分析二分类任务"""
         pred_probs = predictions.squeeze()  # 概率值
         true_binary = true_values.squeeze().astype(int)
@@ -227,20 +226,19 @@ class ModelEvaluation:
         }
 
     def _analyze_multiclass_task(self, predictions: np.ndarray,
-                                 true_values: np.ndarray,
-                                 task_name: str,
-                                 num_classes: int) -> Dict:
+                                 true_values: np.ndarray
+                                 ) -> Dict:
 
         """分析多分类任务"""
 
         pred_probs = predictions
-        pred_classes = np.argmax(predictions, axis=-1)
+        pred_classes = np.argmax(predictions, axis=-1) # (batch,)
         # np.argmax() 返回数组中最大值的索引 ,每个样本中最大概率的索引
         # 样本1: max(0.1, 0.8, 0.1) = 0.8 → 索引1
         # 样本2: max(0.7, 0.2, 0.1) = 0.7 → 索引0
 
-        true_classes = true_values.squeeze().astype(int)
-        accuracy = np.mean(pred_classes == true_classes)
+        true_classes = true_values.squeeze().astype(int) # (batch, 1, 1) 移除数组中维度为1的轴。
+        accuracy = np.mean(pred_classes == true_classes) # 变成同样的1维数组比较
 
         print(f"Accuracy: {accuracy:.4f}")
         print("分类报告:")

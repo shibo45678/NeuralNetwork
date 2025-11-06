@@ -1,4 +1,6 @@
-from data.processing import ProcessOtherColumns
+
+from data.feature_engineering.process_other_cols import ProcessOtherColumns
+
 import pandas as pd
 
 

@@ -1,6 +1,6 @@
 
-from data.data_cleaner.handle_extre_numeric_features import NumericOutlierProcessor
-from data.data_cleaner.check_extre_numeric_features import CheckExtreFeatures
+from data.data_preparation.handle_extre_numeric_features import NumericOutlierProcessor
+from data.data_preparation.check_extre_numeric_features import CheckExtreFeatures
 
 import pandas as pd
 import numpy as np

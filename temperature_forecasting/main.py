@@ -1,456 +1,276 @@
-from src.data.processing import (DataLoader,DescribeData,DeleteUselessCols,RemoveDuplicates,ProblemColumnsFixed,SpecialColumnsFixed,
-                                 ColumnsTypeIdentify,ProcessTimeseriesColumns,ProcessNumericColumns,
-                                 ProcessCategoricalColumns,ProcessOtherColumns,)
-from src.data.exploration import Visualization
-from data.windows import WindowGenerator
-from src.models.cnn import CnnModel
-from src.models.lstm import LstmModel
-from src.training.training_models import TrainingModel
-from src.evaluation.metrics import evaluate_model
-from .trained.trained import ReconstructPredictor
-from src.utils.config import TensorFlowConfig
-import matplotlib.pyplot as plt
-from src.utils.debug_controller import DebugController
-
-
+# from src.data.exploration import Visualization
+# from data.windows import WindowGenerator
+# from src.models.cnn import CnnModel
+# from src.models.lstm import LstmModel
+# from src.training.training_models import TrainingModel
+# from src.evaluation.metrics import evaluate_model
+# from .trained.trained import ReconstructPredictor
+# import matplotlib.pyplot as plt
+# from src.utils.debug_controller import DebugController
 # sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-# main.py
-from industrial_system import IndustrialMLSystem
-import pandas as pd
 
+from models.NeuralNetwork import TimeSeriesEstimator
+from data.data_preprocessing import SystematicResampler
 
-def main():
-    # 配置参数
-    config = {
-        'data_path': 'data/raw_data.csv',
-        'model_save_path': 'models/production_model.pkl'
-    }
+# 优化方向：
+# 追加参数检测 window / handle_extre_numeric / check_extre 异常值可以针对每列选择不同填充方式 或 改写自定义只处理单列
+# process_categorical_cols 支持排除列
+# 时间列处理中新生成列 独立放入feature_generator
+# 每种类型里面 生成新的特征 模块点 小标题系统点（风矢量是数值列、process将encoding onehot 纳入、feature generator 可以独立、时间列（单）处理和生成分离
 
-    # 初始化系统
-    ml_system = IndustrialMLSystem()
+from src.utils.config import TensorFlowConfig
+from pipelines.preprocess_pipeline import CompletePreprocessor
+from data.data_preprocessing import TimeSeriesSplitter
+from data.data_preparation import (DataLoader, DescribeData, RemoveDuplicates, DeleteUselessCols, ProblemColumnsFixed,
+                                   SpecialColumnsFixed, CheckExtreFeatures,
+                                   MarkNumericOutlier,
+                                   CategoricalOutlierProcessor, NumericMissingValueHandler,
+                                   CategoricalMissingValueHandler,
+                                   ColumnsTypeIdentify,
+                                   ConvertCategoricalColumns,
+                                   ConvertNumericColumns)
 
-    # 加载数据
-    data = pd.read_csv(config['data_path'])
-    X = data.drop('target', axis=1)
-    y = data['target']
-
-    # 训练系统
-    ml_system.train(X, y)
-
-    # 保存模型
-    ml_system.save(config['model_save_path'])
-
-    print("系统训练完成并已保存")
-
-
-if __name__ == "__main__":
-    main()
-
-
+from data.feature_engineering import (GenerationFromNumeric, ProcessTimeseriesColumns, BasedOnCorrSelector,
+                                      UnifiedFeatureScaler, CategoricalEncoding)
 
 
 def main():
     TensorFlowConfig.setup_environment()
-    # 初始化调试控制器，指定监控的文件
-    debug_ctrl = DebugController()
-    current_file = __file__  # 当前文件路径
-
-    # 集中预声明所有可能的变量,避免黄色警告
-    # train_inputs = None
-    # train_labels = None
-    # cnn_model = None
-    # single_window = None
-    # val_mae_cnn = None
-    # val_mae_lstm1 = None
-    # val_mae_lstm2 = None
-    # test_mae_cnn = None
-    # test_mae_lstm1 = None
-    # test_mae_lstm2 = None
-    # timeseries_cnn_model = None
-
-    print(f"当前会话状态:")
-    print(debug_ctrl.get_session_info())
-
-    if debug_ctrl.continue_from_breakpoint('after_data_preparation', locals(), __file__):
-        print("从 after_data_preparation 阶段继续")
-    else:
-        print("=== 重新执行 data_preparation 阶段 ===")
-        print("包括：清洗数据 + 划分数据集 + 构建窗口数据...")
-        # STAGE_START:after_data_preparation
-
-        # 创建完整预处理管道
-        preprocessor = CompletePreprocessor()
-        preprocessor.add_data_cleaner(DataCleaner())
-        preprocessor.add_feature_engineer(SupervisedFeatureSelector(k=5))
-        preprocessor.add_feature_engineer(TargetEncodingEngineer())
-
-        # 训练数据
-        X_train = pd.DataFrame({
-            'num1': [1, 2, 2, 3, 4, 4],
-            'cat1': ['A', 'B', 'B', 'A', 'C', 'C'],
-            'num2': [1.1, 2.2, 2.2, 3.3, 4.4, 4.4]
-        })
-        y_train = pd.Series([0, 1, 1, 0, 1, 1])
-
-        print("原始数据:")
-        print(f"X: {X_train.shape}, y: {y_train.shape}")
-
-        # 训练模型
-        from sklearn.ensemble import RandomForestClassifier
-        model = RandomForestClassifier()
-        model.fit(X_processed, y_processed)
-
-        # 预测新数据
-        X_new = pd.DataFrame({
-            'num1': [2, 3, 5],
-            'cat1': ['B', 'A', 'D'],
-            'num2': [2.2, 3.3, 5.5]
-        })
-
-        X_new_processed, _ = preprocessor.transform(X_new, None)
-        predictions = model.predict(X_new_processed)
-        print(f"预测结果: {predictions}")
-
-        return model, preprocessor
-
-        # 运行示例
-        model, preprocessor = complete_workflow()
-
-
-
-
-
-
-        full_pipeline =Pipeline([
-            ('encode_loading',DataLoader(input_files=["data_climate.csv"],pattern = "new_*.csv",data_dir ="data")),
-            ('describing',DescribeData()),
-            ('delete_cols',DeleteUselessCols(target_cols=[])),
-            ('remove_duplicates',RemoveDuplicates(download_config={'enabled': False})), # 不下载
-            ('problem_fixer',ProblemColumnsFixed(problem_columns=[])),
-            ('special_fixer',SpecialColumnsFixed(problem_columns=[])),
-
-
-
-
-
-
-
-            ('identify_columns_type',ColumnsTypeIdentify()),
-            # 时间列要支持周期性编码、离散特征的独热编码astype(category)、新增数值列后续的标准化
-            ('timeseries_processor', ProcessTimeseriesColumns(col='Date Time', format='%d.%m.%Y %H:%M:%S',interactive=False)),
-            ('othercols_processor', ProcessOtherColumns(dir_cols=['wd'], var_cols=['wv', 'max. wv'])),# vec_col 风矢量 要求顺序
-            ('numeric_processor', ProcessNumericColumns(cols=[], preserve_integer_types=True,exclude_cols=['Day_sin','Day_cos','Year_sin','Year_cos'])),
-            ('categorical_processor', ProcessCategoricalColumns(cols=[], onehot_threshold=5)),
-
-
-
-           .check_extreme_features({'name': 'iqr', 'threshold': 1.5})  # 查看
-            .handle
-            method_config_complex = [
-                ('minmax', {'feature_range': [(0, 100), (0, 200), (0, 300)],
-                            'columns': ['age', 'height', 'weight']}),
-                ('zscore', {'threshold': 2.5, 'columns': ['income', 'score']}),
-                ('iqr', {'threshold': 1.5, 'columns': ['temperature']}),
-                ('robust', {'quantile_range': (5, 95), 'columns': ['pressure']}),
-                ('isolationforest', {'contamination': 0.1, 'columns': ['income']}),  # 注意：income会重复检测
-            ]
-
-
-    ])
-
-        # 适合放入Pipeline的步骤：不改变样本量
-        # 填充缺失值
-        .handle_missing_values(cat_strategy='mode',
-                               num_strategy='median')  # 异常值处理前慎用均值填充 分类数据里面有季节，填mode好吗
-        # 标准化
-        # 编码分类
-        # 步骤4：特征选择（内置，保留 top 10 特征）
-        ('feature_selector', SelectKBest(score_func=f_classif, k=10)),
-        # 降维
-        # 模型
-
-        # 执行pipeline
-        processed_data = full_pipeline.fit_transform(X,y)
-
-
-        preprocessor = (DataPreprocessor(input_files=["data_climate.csv"])
-
-
-
-
-
-        .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
-        .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
-
-
-
-
-        .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
-
-        config= [
-            ('minmax', {'feature_range': (0, 1), 'columns': ['T']}),
-            # ('std_scaler', {'columns': []}),
-            # ('robust_scaler', {'quantile_range': (25, 75), 'columns': []})
-        ]
-        # 保存预处理结束时的scalar配置
-        scalers_path = preprocessor.save_scalers(filename='scalers.pkl')
-        constant_path = preprocessor.save_constant_values(filename='constant.pkl')
-
-        print("\n处理历史:")
-        history = preprocessor.get_histroy()
-        print(history)
-
-        # 画小提琴图（观察整个df标准化后的数据分布)
-        df_std = preprocessor.get_data()
-        df_std = df_std.melt(var_name='Column', value_name='normalized')  # 宽表变长表，数据形状匹配
-
-        viz = Visualization()
-        viz.violin_plot(df=df_std,
-                        var_name='Column', value_name='normalized',  # Standardized
-                        title="统计分布小提琴图")
-
-
-
-
-
-
-        """构建窗口数据"""
-        # 1 使用WindowGenerator类实例 构造窗口数据
-        df_train = preprocessor.get_train_val_test_data()[0]
-        df_val = preprocessor.get_train_val_test_data()[1]
-        df_test = preprocessor.get_train_val_test_data()[2]
-
-        # 指定预测特征列
-        single_window = WindowGenerator(input_width=6, label_width=5, shift=24, label_columns=['T', 'p'])
-        print(single_window)
-
-        # 2 构建训练集、验证集和测试集
-        print('训练数据：')
-        window_train_data = single_window.createDataset(df_train)
-        print(window_train_data)
-        # 正确获取inputs和labels的形状
-        # createTrainSet()返回的是tf.data.Dataset对象，不是普通的元组列表
-        # 必须使用TensorFlow的迭代机制：iter(), take()正确解包inputs和labels ：for... .take(1) / example有iter
-        train_inputs, train_labels = single_window.example
-        print(f"train_inputs 形状: {train_inputs.shape}")
-        print(f"train_labels 形状: {train_labels.shape}")
-
-        print('验证数据：')
-        window_val_data = single_window.createDataset(df_val)
-        print(window_val_data)
-        print('测试数据：')
-        window_test_data = single_window.createDataset(df_test)
-        print(window_test_data)
-
-        # 画个训练集的图
-        single_window.window_plot(plot_col='T')
-
-        # STAGE_END:after_data_preparation
-        debug_ctrl.save_debug_session(locals(), 'after_data_preparation', __file__)
-
-    """=========================================CNN========================================="""
-    if debug_ctrl.continue_from_breakpoint('after_model_build_cnn', locals(), __file__):
-        print("从 after_model_build_cnn 阶段继续")
-    else:
-        print("==== 重新执行 model_build_cnn 阶段 ====")
-        print("包括：构建、编译...")
-        # STAGE_START:after_model_build_cnn
-
-        # 基于历史6个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点 'T''p'列
-        timeseries_cnn_model = CnnModel(architecture_type='parallel')  # 分支并行模式
-        config_cnn_parallel_model = {
-            'input_shape': train_inputs.shape[1:],  # 去掉batch的形状
-            'output_shape': train_labels.shape[1:],
-            'branch_filters': [[32, 32], [64, 64]],
-            'branch_kernels': [[2, 3], [2, 3]],
-            'branch_dilation_rate': [[1, 1], [1, 1]],
-            'activation': 'relu'}  # 或者'swish'
-        cnn_model = timeseries_cnn_model._build_parallel_model(config_cnn_parallel_model)
-
-        # STAGE_END:after_model_build_cnn
-        debug_ctrl.save_debug_session(locals(), 'after_model_build_cnn', __file__)
-
-    if debug_ctrl.continue_from_breakpoint('after_training_cnn', locals(), __file__):
-        print("从 after_training_cnn 阶段继续")
-    else:
-        print("====重新执行 training_cnn 阶段 ====")
-        print("包括：CNN 模型的训练 + 评估")
-        # STAGE_START:after_training_cnn
-
-        # 训练模型
-        history_cnn, cnn_weights_path = TrainingModel(model_name='cnn', model=cnn_model,
-                                                      trainset=window_train_data,
-                                                      valset=window_val_data,
-                                                      verbose=2, epochs=20)
-        timeseries_cnn_model.summary()  # 出来一个表 显示每一层参数个数
-
-        # 重构模型
-        reconstr_cnn = (ReconstructPredictor()
-                        .reconstruct_trained_model(original_model=cnn_model, weights_path=cnn_weights_path)
-                        .get_constr_model())
-
-        # 评估模型
-        val_mae_cnn, test_mae_cnn = evaluate_model(name='cnn_model', model=reconstr_cnn,
-                                                   window=single_window,
-                                                   valset=window_val_data,
-                                                   testset=window_test_data)
-        print(f"评估模型 best_model_cnn 的验证集和测试集的均方绝对值误差MAE结果如下：")
-        print(val_mae_cnn, test_mae_cnn)
-
-        # STAGE_END:after_training_cnn
-        debug_ctrl.save_debug_session(locals(), 'after_training_cnn', __file__)
-
-    """=========================================LSTM1========================================="""
-    if debug_ctrl.continue_from_breakpoint('after_model_lstm1', locals(), __file__):
-        print("==== 从after_model_lstm1 阶段继续 ====")
-    else:
-        print("==== 重新执行 model_lstm1 阶段 ====")
-        print("包括：lstm1模型的构建、编译、训练、评估...")
-        # STAGE_START:after_model_lstm1
-
-        timeseries_lstm1_model = LstmModel()
-        config_lstm1 = {
-            'units': [64, ],
-            'return_sequences': [False, ],  # 只输出最后一行
-            'output_shape': train_labels.shape[1:]}
-
-        lstm1_model = timeseries_lstm1_model._build_sequential_model(config_lstm1)
-        """训练LSTM模型1"""
-        history_lstm1, lstm1_weights_path = TrainingModel(model_name='lstm1', model=lstm1_model,
-                                                          trainset=window_train_data,
-                                                          valset=window_val_data, verbose=2, epochs=100)
-        timeseries_lstm1_model.summary()  # 参数个数
-
-        # 重构模型
-        reconstr_lstm1 = (ReconstructPredictor()
-                          .reconstruct_trained_model(original_model=lstm1_model, weights_path=lstm1_weights_path)
-                          .get_constr_model())
-
-        """评估LSTM模型1"""
-        val_mae_lstm1, test_mae_lstm1 = evaluate_model(name='lstm1', model=reconstr_lstm1,
-                                                       window=single_window,
-                                                       valset=window_val_data, testset=window_test_data)
-        print(f"评估模型 best_model_lstm1 的验证集和测试集的均方绝对值误差MAE结果如下：")
-        print(val_mae_lstm1, test_mae_lstm1)
-
-        # STAGE_END:after_model_lstm1
-        debug_ctrl.save_debug_session(locals(), 'after_model_lstm1', __file__)
-
-    """=========================================LSTM2========================================="""
-    if debug_ctrl.continue_from_breakpoint('after_model_lstm2', locals(), __file__):
-        print("==== 从 after_model_lstm2 阶段继续 ====")
-    else:
-        print("==== 重新执行 model_lstm2 阶段 ====")
-        print("包括：lstm2模型的构建、编译、训练、评估")
-        # STAGE_START:after_model_lstm2
-
-        timeseries_lstm2_model = LstmModel()
-        config_lstm2 = {
-            'units': [64, 64],  # 2层LSTM
-            'return_sequences': [True, False],  # 只输出最后一行
-            'output_shape': train_labels.shape[1:]}
-        lstm2_model = timeseries_lstm2_model._build_sequential_model(config_lstm2)
-
-        """训练LSTM模型2"""
-        history_lstm2, lstm2_weights_path = TrainingModel(model_name='lstm2', model=lstm2_model,
-                                                          trainset=window_train_data,
-                                                          valset=window_val_data, verbose=2, epochs=100)
-        timeseries_lstm2_model.summary()  # 参数个数
-
-        # 重构模型
-        reconstr_lstm2 = (ReconstructPredictor()
-                          .reconstruct_trained_model(original_model=lstm2_model, weights_path=lstm1_weights_path)
-                          .get_constr_model())
-
-        """评估LSTM模型2"""
-        val_mae_lstm2, test_mae_lstm2 = evaluate_model(name='lstm2', model=reconstr_lstm2, window=single_window,
-                                                       trainset=window_train_data, valset=window_val_data)
-        print(f"评估模型 best_model_lstm2 的验证集和测试集的均方绝对值误差MAE结果如下：")
-        print(val_mae_lstm2, test_mae_lstm2)
-
-        # STAGE_END:after_model_lstm2
-        debug_ctrl.save_debug_session(locals(), 'after_model_lstm2', __file__)
-
-    """=========================================比较CNN和LSTM的预测效果========================================="""
-    if debug_ctrl.continue_from_breakpoint('after_models_compare', locals(), __file__):
-        print("==== 从 after_models_compare 阶段继续 ====")
-    else:
-        print("==== 重新执行models_compare ====")
-        print("包括：cnn,lstm1,lstm2 模型的 MAE对比")
-        # STAGE_START:after_models_compare
-
-        # 画出每个模型里面测试集和验证集的MAE
-        val_mae = [val_mae_cnn, val_mae_lstm1, val_mae_lstm2]
-        test_mae = [test_mae_cnn, test_mae_lstm1, test_mae_lstm2]
-        x = len(val_mae)  # 3个模型
-
-        plt.ylabel('mean_absolute_error')  # 指定纵轴标签
-        plt.bar(x=x - 0.17, height=val_mae, width=0.3, label='Validation')
-        plt.bar(x=x + 0.17, height=test_mae, width=0.3, label='Test')
-        plt.xticks(ticks=x, labels=['conv1D', 'lstm1', 'lstm2'], rotation=45)
-        _ = plt.legend()
-
-        # STAGE_END:after_models_compare
-        debug_ctrl.save_debug_session(locals(), 'after_models_compare', __file__)
-
-    """=========================================预测========================================="""
-
+    '''
+    1. 严格按照数据的【处理顺序】使用‘class’，并标记'len_change'(这里将改变数据长度的步骤，手动处理）
+    2. 手动处理的类:是无法放进pipeline的类，不会继承BaseEstimator和TransfromerMixin。并且使用learn_process处理。
+    '''
+    check_outliers_config = {'method': 'iqr', 'threshold': 1.5}
+
+    download_outliers_details_config = {
+        'enabled': True,
+        'path': '~/Python/NeuralNetwork/temperature_forecasting/data/intermediate',
+        'filename': 'outliers.csv'}
+
+    numeric_outliers_config = [
+        ('zscore', {'threshold': 3, 'columns': ['T', 'Tpot', 'Tdew']}),  # 前额常接近正态分布，Z-score效果好
+        ('iqr', {'threshold': 1.5, 'columns': ['p', 'VPmax', 'VPact', 'VPdef']}),  # 气压有明确的物理范围，IQR对中等离群值敏感
+        ('robust', {'quantile_range': (5, 95), 'columns': ['rh', 'sh', 'H2OC']}),  # 分位数检测对分布偏斜
+        ('isolationforest', {'contamination': 0.025, 'columns': ['rho', 'wv', 'max. wv', 'wd']})  # 对复杂分布效果好
+    ]
+    numeric_missing_config = {
+        'spec_fill': [
+            {'constant': {'columns': ['A', ], 'fill_value': [30, ]}},  # 区分scaler，这里是按顺序，后已调整
+            {'mode': {'columns': ['C', 'D', 'E']}}
+        ],
+        'skip_fill': ['max. wv', 'wv'],
+        'smart_fill_remain': True,
+        'important_columns': ['T', 'p'],
+    }
+    scaling_config = {
+        'transformers': [
+            {'minmax': {'columns': ['T', 'S'], 'feature_range': (0, 1), ...}},  # 相同方法，相同其他参数配置，在columns列表填写
+            {'minmax': {'columns': ['W'], 'feature_range': (-1, 1)}},  # 相同方法，但是其他参数配置与前一配置不同，允许在下一行填写
+            {'standard': {'columns': ['P', 'Q']}},
+            {'robust': {'columns': ['R'], 'quantile_range': (10, 90)}}
+        ],
+        'skip_scale': ['is_night', 'Date Time']  # 跳过二分类，原始时间列
+    }
+
+    preparation_configs = [
+        {'class': [DescribeData()], 'len_change': False},
+        {'class': [RemoveDuplicates(), DeleteUselessCols()], 'len_change': True},
+        {'class': [ColumnsTypeIdentify(),
+                   ConvertCategoricalColumns(), ConvertNumericColumns(preserve_integer_types=True, exclude_cols=[]),
+                   ProblemColumnsFixed(problem_columns=['wv']), SpecialColumnsFixed(problem_columns=['T']),
+                   CheckExtreFeatures(method_config=check_outliers_config,
+                                      download_config=download_outliers_details_config),
+                   MarkNumericOutlier(method_config=numeric_outliers_config),
+                   CategoricalOutlierProcessor(pass_through=True),
+                   NumericMissingValueHandler(method_config=numeric_missing_config),
+                   CategoricalMissingValueHandler(method_config=None, pass_through=True)], 'len_change': False},
+
+        {'class': [SystematicResampler(start_index=5, step=6, reset_index=True)], 'len_change': True},
+
+        {'class': [GenerationFromNumeric(dir_cols=['wd'], var_cols=['wv', 'max. wv']),
+                   ProcessTimeseriesColumns(interactive=True, auto_detect_string_format=True),  # 开启交互式功能 + 自动检测时间列
+                   BasedOnCorrSelector(pass_through=True),
+                   UnifiedFeatureScaler(method_config=None, algorithm='cnn'),  # 自动根据数据分布及算法类型进行推荐标准化
+                   CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__'),
+                   ], 'len_change': False}
+
+
+
+    ]
+
+    # 1. 加载数据
+    loader = DataLoader(input_files=['data_climate'], pattern="new_*.csv", data_dir="'data'/'raw'")
+    raw_data = loader.learn_process()
+
+    # 2. 数据集分割
+    splitter = TimeSeriesSplitter(train_size=0.6, val_size=0.3, test_size=0.1, shuffle=False)
+    df_train, df_val, df_test = splitter.learn_process(raw_data)
+
+    # 3. 数据预处理
+    preparation = CompletePreprocessor(preparation_configs)
+    features_temp_train = preparation.train(features=df_train, labels=None)
+    features_temp_val = preparation.transform(features=df_val, labels=None)
+    features_temp_test = preparation.transform(features=df_test, labels=None)
+
+
+
+    # 4. 采样 + 特征工程
+
+    # 5. 验证
+
+    # 3. 训练（内部已经配置好了所有清洗和特征工程步骤）
+    preprocessor.train(raw_data, labels=None)
+
+    # 4. 预测
+
+    predictions = preprocessor.predict(new_data)
+
+    print(f"生成 {len(predictions)} 个预测结果")
+    return predictions
+
+
+# .train_val_test_split(train_size=0.7, val_size=0.2, test_size=0.1)
+# .unify_feature_scaling(transformers=config))  # 独热编码 / 分类型 / 时间不处理
+# .systematic_resample(start_index=5, step=6)  # 切片，从第一小时开始（索引5开始），每隔6个(6*10分钟)采一次
+
+
+config = [
+    ('minmax', {'feature_range': (0, 1), 'columns': ['T']}),
+    # ('std_scaler', {'columns': []}),
+    # ('robust_scaler', {'quantile_range': (25, 75), 'columns': []})
+]
 
 if __name__ == "__main__":
     main()
 
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import SelectKBest
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+# 画小提琴图（观察整个df标准化后的数据分布)
+df_std = preprocessor.get_data()
+df_std = df_std.melt(var_name='Column', value_name='normalized')  # 宽表变长表，数据形状匹配
 
-# 1. 加载数据
-X, y = load_your_data()
+viz = Visualization()
+viz.violin_plot(df=df_std,
+                var_name='Column', value_name='normalized',  # Standardized
+                title="统计分布小提琴图")
 
+"""构建窗口数据"""
+# 1 使用WindowGenerator类实例 构造窗口数据
+df_train = preprocessor.get_train_val_test_data()[0]
+df_val = preprocessor.get_train_val_test_data()[1]
+df_test = preprocessor.get_train_val_test_data()[2]
 
-# ✅ 推荐：先分割，再分别处理
-X_train, X_val, X_test, y_train, y_val, y_test = splitter.split(X, y)
+# 指定预测特征列
+single_window = WindowGenerator(input_width=6, label_width=5, shift=24, label_columns=['T', 'p'])
+print(single_window)
 
-# 然后为每个数据集创建独立的pipeline
-train_pipeline = Pipeline([...])
-train_pipeline.fit(X_train, y_train)
+# 2 构建训练集、验证集和测试集
+print('训练数据：')
+window_train_data = single_window.createDataset(df_train)
+print(window_train_data)
+# 正确获取inputs和labels的形状
+# createTrainSet()返回的是tf.data.Dataset对象，不是普通的元组列表
+# 必须使用TensorFlow的迭代机制：iter(), take()正确解包inputs和labels ：for... .take(1) / example有iter
+train_inputs, train_labels = single_window.example
+print(f"train_inputs 形状: {train_inputs.shape}")
+print(f"train_labels 形状: {train_labels.shape}")
 
+print('验证数据：')
+window_val_data = single_window.createDataset(df_val)
+print(window_val_data)
+print('测试数据：')
+window_test_data = single_window.createDataset(df_test)
+print(window_test_data)
 
-# 2. 创建特征工程Pipeline
-feature_pipeline = Pipeline([
-    ('imputer', SimpleImputer(strategy='median')),
-    ('scaler', StandardScaler()),
-    ('feature_selector', SelectKBest(k=15))
-])
+# 画个训练集的图
+single_window.window_plot(plot_col='T')
 
-# 3. 应用特征工程
-print("进行特征工程...")
-X_processed = feature_pipeline.fit_transform(X, y)
+# 基于历史6个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点 'T''p'列
+timeseries_cnn_model = CnnModel(architecture_type='parallel')  # 分支并行模式
+config_cnn_parallel_model = {
+    'input_shape': train_inputs.shape[1:],  # 去掉batch的形状
+    'output_shape': train_labels.shape[1:],
+    'branch_filters': [[32, 32], [64, 64]],
+    'branch_kernels': [[2, 3], [2, 3]],
+    'branch_dilation_rate': [[1, 1], [1, 1]],
+    'activation': 'relu'}  # 或者'swish'
+cnn_model = timeseries_cnn_model._build_parallel_model(config_cnn_parallel_model)
 
+# 训练模型
+history_cnn, cnn_weights_path = TrainingModel(model_name='cnn', model=cnn_model,
+                                              trainset=window_train_data,
+                                              valset=window_val_data,
+                                              verbose=2, epochs=20)
+timeseries_cnn_model.summary()  # 出来一个表 显示每一层参数个数
 
+# 重构模型
+reconstr_cnn = (ReconstructPredictor()
+                .reconstruct_trained_model(original_model=cnn_model, weights_path=cnn_weights_path)
+                .get_constr_model())
 
-print(f"训练集: {X_train.shape[0]} 样本")
-print(f"验证集: {X_val.shape[0]} 样本")
-print(f"测试集: {X_test.shape[0]} 样本")
+# 评估模型
+val_mae_cnn, test_mae_cnn = evaluate_model(name='cnn_model', model=reconstr_cnn,
+                                           window=single_window,
+                                           valset=window_val_data,
+                                           testset=window_test_data)
+print(f"评估模型 best_model_cnn 的验证集和测试集的均方绝对值误差MAE结果如下：")
+print(val_mae_cnn, test_mae_cnn)
 
-# 5. 训练模型
-print("训练模型...")
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X_train, y_train)
+timeseries_lstm1_model = LstmModel()
+config_lstm1 = {
+    'units': [64, ],
+    'return_sequences': [False, ],  # 只输出最后一行
+    'output_shape': train_labels.shape[1:]}
 
-# 6. 评估模型
-val_pred = model.predict(X_val)
-test_pred = model.predict(X_test)
+lstm1_model = timeseries_lstm1_model._build_sequential_model(config_lstm1)
+"""训练LSTM模型1"""
+history_lstm1, lstm1_weights_path = TrainingModel(model_name='lstm1', model=lstm1_model,
+                                                  trainset=window_train_data,
+                                                  valset=window_val_data, verbose=2, epochs=100)
+timeseries_lstm1_model.summary()  # 参数个数
 
-print(f"验证集准确率: {accuracy_score(y_val, val_pred):.4f}")
-print(f"测试集准确率: {accuracy_score(y_test, test_pred):.4f}")
+# 重构模型
+reconstr_lstm1 = (ReconstructPredictor()
+                  .reconstruct_trained_model(original_model=lstm1_model, weights_path=lstm1_weights_path)
+                  .get_constr_model())
 
-pipeline = Pipeline([
-    ('splitter', CommonSplitter(shuffle=True, random_state=42)),
-    ('scaler', StandardScaler()),
-    ('classifier', LogisticRegression(random_state=42))
-])
-    
+"""评估LSTM模型1"""
+val_mae_lstm1, test_mae_lstm1 = evaluate_model(name='lstm1', model=reconstr_lstm1,
+                                               window=single_window,
+                                               valset=window_val_data, testset=window_test_data)
+print(f"评估模型 best_model_lstm1 的验证集和测试集的均方绝对值误差MAE结果如下：")
+print(val_mae_lstm1, test_mae_lstm1)
+
+timeseries_lstm2_model = LstmModel()
+config_lstm2 = {
+    'units': [64, 64],  # 2层LSTM
+    'return_sequences': [True, False],  # 只输出最后一行
+    'output_shape': train_labels.shape[1:]}
+lstm2_model = timeseries_lstm2_model._build_sequential_model(config_lstm2)
+
+"""训练LSTM模型2"""
+history_lstm2, lstm2_weights_path = TrainingModel(model_name='lstm2', model=lstm2_model,
+                                                  trainset=window_train_data,
+                                                  valset=window_val_data, verbose=2, epochs=100)
+timeseries_lstm2_model.summary()  # 参数个数
+
+# 重构模型
+reconstr_lstm2 = (ReconstructPredictor()
+                  .reconstruct_trained_model(original_model=lstm2_model, weights_path=lstm1_weights_path)
+                  .get_constr_model())
+
+"""评估LSTM模型2"""
+val_mae_lstm2, test_mae_lstm2 = evaluate_model(name='lstm2', model=reconstr_lstm2, window=single_window,
+                                               trainset=window_train_data, valset=window_val_data)
+print(f"评估模型 best_model_lstm2 的验证集和测试集的均方绝对值误差MAE结果如下：")
+print(val_mae_lstm2, test_mae_lstm2)
+
+# 画出每个模型里面测试集和验证集的MAE
+val_mae = [val_mae_cnn, val_mae_lstm1, val_mae_lstm2]
+test_mae = [test_mae_cnn, test_mae_lstm1, test_mae_lstm2]
+x = len(val_mae)  # 3个模型
+
+plt.ylabel('mean_absolute_error')  # 指定纵轴标签
+plt.bar(x=x - 0.17, height=val_mae, width=0.3, label='Validation')
+plt.bar(x=x + 0.17, height=test_mae, width=0.3, label='Test')
+plt.xticks(ticks=x, labels=['conv1D', 'lstm1', 'lstm2'], rotation=45)
+_ = plt.legend()

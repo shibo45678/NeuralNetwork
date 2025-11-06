@@ -9,6 +9,19 @@ import glob
 
 class DebugController:
     """专门用于调试的检查点系统，- 修复序列化"""
+    """ 
+    使用方式：
+    每段前面加 ：
+    if debug_ctrl.continue_from_breakpoint('after_model_build_cnn', locals(), __file__):
+        print("从 after_model_build_cnn 阶段继续")
+    else:
+        print("==== 重新执行 model_build_cnn 阶段 ====")
+        print("包括：构建、编译...")
+        # STAGE_START:after_model_build_cnn
+    每段后面加：
+    STAGE_END:after_model_build_cnn
+          debug_ctrl.save_debug_session(locals(), 'after_model_build_cnn', __file__)
+    """
 
     def __init__(self, debug_dir='debug_sessions'):
         self.debug_dir = debug_dir

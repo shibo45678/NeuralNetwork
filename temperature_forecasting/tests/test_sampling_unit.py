@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from data.data_cleaner.sampling import SystematicResampler,TimeBasedResampler
+from data.data_preprocessing.sampling import SystematicResampler,TimeBasedResampler
 
 class TestSystematicResampler:
     """SystematicResampler 单元测试"""

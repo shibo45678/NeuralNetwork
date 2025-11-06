@@ -1,4 +1,4 @@
-from data.data_cleaner.handle_extre_categorical_features import CategoricalOutlierProcessor
+from data.data_preparation.handle_extre_categorical_features import CategoricalOutlierProcessor
 import pandas as pd
 
 
@@ -52,7 +52,7 @@ def test_categorical_processor_focus():
 
     # 3. 学习数据模式
     print("\n3. 学习数据模式...")
-    processor.learn_categories(df)
+    processor.fit_transform(df)
 
     # 4. 测试 nan 拼写纠正
     print("\n4. 测试 nan 拼写纠正...")
@@ -62,7 +62,7 @@ def test_categorical_processor_focus():
         print(f"  '{val}': {count}")
 
     # 应用清洗
-    df_cleaned = processor.clean_categorical_data(df, strategy='consolidate')
+    df_cleaned = processor.transform(df)
 
     print("\n清洗后 nan 相关值分布:")
     nan_cleaned = df_cleaned['nan_variations'].value_counts(dropna=False)

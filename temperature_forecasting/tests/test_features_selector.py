@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import pytest
-from data.feature_engineer.feature_selector import FeatureSelector
+from data.feature_engineering.features_selector import FeaturesSelector
 
 
 # 创建测试数据的 fixture
@@ -34,7 +34,7 @@ def test_normal_training_mode(sample_data):
     print("原始特征:", X_train.columns.tolist())
     print(f"user_note的类型: {X_train['user_note'].dtype}")
 
-    selector = FeatureSelector(threshold=0, mode='train')
+    selector = FeaturesSelector(threshold=0, mode='train')
     selector.fit(X_train, y_train)
 
     X_train_selected = selector.transform(X_train)
@@ -48,7 +48,7 @@ def test_prediction_mode(sample_data):
     """测试预测模式"""
     X_train, y_train = sample_data
     # 先训练一个selector
-    selector = FeatureSelector(threshold=0, mode='train')
+    selector = FeaturesSelector(threshold=0, mode='train')
     selector.fit(X_train, y_train)
 
     print("\n=== 测试案例2：预测模式 ===")
@@ -69,7 +69,7 @@ def test_high_threshold(sample_data):
     """测试高阈值情况"""
     X_train, y_train = sample_data
     print("\n=== 测试案例3：高阈值情况 ===")
-    selector_high_threshold = FeatureSelector(threshold=0.9, mode='train')
+    selector_high_threshold = FeaturesSelector(threshold=0.9, mode='train')
     selector_high_threshold.fit(X_train, y_train)
 
     X_high_threshold = selector_high_threshold.transform(X_train)
@@ -83,7 +83,7 @@ def test_no_target_variable(sample_data):
     """测试无目标变量情况"""
     X_train, y_train = sample_data
     print("\n=== 测试案例4：无目标变量情况 ===")
-    selector_no_y = FeatureSelector(threshold=0.1, mode='predict')
+    selector_no_y = FeaturesSelector(threshold=0.1, mode='predict')
     selector_no_y.fit(X_train)  # 不传入y
 
     X_no_y = selector_no_y.transform(X_train)

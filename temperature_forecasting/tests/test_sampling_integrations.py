@@ -1,11 +1,9 @@
-import pytest
 import pandas as pd
-import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.datasets import make_classification
-from data.data_cleaner.sampling import SystematicResampler,TimeBasedResampler
+from data.data_preprocessing.sampling import SystematicResampler
 
 
 class TestResamplerIntegration:
@@ -58,7 +56,7 @@ class TestResamplerIntegration:
     #
     #     # 创建机器学习模型
     #     from sklearn.ensemble import RandomForestClassifier
-    #     from data.feature_engineer.split_datasets import train_val_test_split # 后续会改成适配sklearn模式
+    #     from data.feature_engineering.split_datasets import train_val_test_split # 后续会改成适配sklearn模式
     #     # 拆分数据
     #     df = pd.concat([X_sampled,y_sampled],axis =1)
     #     res = train_val_test_split(df,train_size= 0.7, val_size = 0, test_size= 0.3) # 自定义拆分函数
