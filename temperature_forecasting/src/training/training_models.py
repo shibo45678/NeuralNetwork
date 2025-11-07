@@ -5,16 +5,14 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import tensorflow as tf
 
 
-def TrainingModel(model_name:str,
-                model,  # tf.keras.models
-                trainset,
-                valset,
-                weights_path,
-                epochs: int = 20, # 总轮数
-                verbose: int = 2,
-                ):
-
-
+def TrainingModel(model_name: str,
+                  model,  # tf.keras.models
+                  trainset,
+                  valset,
+                  weights_path,
+                  epochs: int = 20,  # 总轮数
+                  verbose: int = 2,
+                  ):
     record = model.fit(
         trainset,  # x,y
         valset,
@@ -55,9 +53,6 @@ def TrainingModel(model_name:str,
 
     return record
 
-
-
-
 # 一般训练规律 损失值：
 # train loss 不断下降   validation loss不断下降---网络仍在学习
 # train loss 不断下降   validation loss不断上升---网络过拟合，添加dropout和max pooling
@@ -74,5 +69,3 @@ def TrainingModel(model_name:str,
 # train accuracy 趋于不变   validation accuracy 趋于不变---网络陷入瓶颈，减小学习率（自适应效果不大）和batch数量减少
 # train accuracy 不断下降   validation loss 不断下降---网络结构问题，训练超参数设置不当，数据集需要清洗等
 # train accuracy 不断下降   validation loss 不断上升---数据集有问题，建议重新选择
-
-

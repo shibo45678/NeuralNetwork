@@ -1,21 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-# def history_plot(train_metric:np.ndarray,val_metric:np.ndarray,
-#                  title:str,label:str):
-#     plt.figure(figsize=(9, 7))  # 设置图形宽度和高度
-#
-#     epochs = np.arange(1, len(train_metric) + 1)  # 设置横坐标epochs的计算方法
-#     plt.clf()  # 清除所有轴，保持窗口打开
-#
-#     plt.plot(epochs, train_metric, 'r', label="Training")
-#     plt.plot(epochs, val_metric, 'b', label="Validation")
-#     plt.title(title)
-#     plt.xlabel('Epochs')
-#     plt.ylabel(label)
-#     plt.legend()
-#     plt.show()
-
 
 def history_plot(history, model_name=""):
     """通用训练历史绘图函数"""

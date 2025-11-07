@@ -1,6 +1,6 @@
 # 神经网络的特征选择可选跳过：pass through (类型）
 # 1.分割数据集
-# 2.标准化 / 编码 可识别数值/分类->模型内部/窗口要靠手动传才行（除非接入处理编码和标准化的步骤）
+# 2.标准化 / 编码 可识别数值/分类->模型内部时已经编码标准化 都变成数值型（除非接入处理编码和标准化的步骤）
 # 3.窗口
 # __init__(output_configs=None, model_type='cnn', 窗口类 input_width=24, label_width=1, shift=1,batch_size=32, 训练类的epochs=100
 

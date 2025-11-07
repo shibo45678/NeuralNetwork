@@ -164,12 +164,12 @@ class CompletePreprocessor:
                     new = len(features_temp)
                     print(f"第{idx + 1}步完成: {old} -> {new} 样本")
 
-                self.fitted_cleaners[f'cleaner_{idx}'] = fitted_cleaners  # 阶段包含多个cleaners
+                self.fitted_cleaners[f'cleaner_{idx+1}'] = fitted_cleaners  # 阶段包含多个cleaners
 
             else:
                 # 创建pipeline
                 pipeline = Pipeline([
-                    (f'engineer_{i}', engineer) for i, engineer in enumerate(class_obj_list)
+                    (f'engineer_{i+1}', engineer) for i, engineer in enumerate(class_obj_list)
                 ])
                 old = features_temp.shape
 
@@ -178,7 +178,7 @@ class CompletePreprocessor:
                 new = features_temp.shape
                 print(f"第{idx + 1}步完成: 生成 pipeline，sklearn pipeline不改变数据形状。数据形状:{old} -> {new}")
 
-                self.pipelines[f'pipeline_{idx}'] = pipeline
+                self.pipelines[f'pipeline_{idx+1}'] = pipeline
 
         return features_temp, labels_temp
 
@@ -220,5 +220,5 @@ if __name__ == '__main__':
 
     configs2 = [{'obj_list': [RemoveDuplicates(download_config=config)], 'len_change': True}]
     obj = CompletePreprocessor(configs2)
-    obj.learn(raw_data, labels)
-    features_temp, labels_temp = obj.process(raw_data, labels)
+    obj.train(raw_data, labels)
+    features_temp, labels_temp = obj.transform(raw_data, labels)

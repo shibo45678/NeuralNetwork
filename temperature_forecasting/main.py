@@ -1,5 +1,5 @@
 # from src.data.exploration import Visualization
-# from data.windows import WindowGenerator
+
 # from src.models.cnn import CnnModel
 # from src.models.lstm import LstmModel
 # from src.training.training_models import TrainingModel
@@ -33,7 +33,8 @@ from data.data_preparation import (DataLoader, DescribeData, RemoveDuplicates, D
 
 from data.feature_engineering import (GenerationFromNumeric, ProcessTimeseriesColumns, BasedOnCorrSelector,
                                       UnifiedFeatureScaler, CategoricalEncoding)
-
+from data.windows import WindowGeneratorForNeural
+from data.exploration import VisualizationForNeural
 
 def main():
     TensorFlowConfig.setup_environment()
@@ -65,13 +66,18 @@ def main():
     }
     scaling_config = {
         'transformers': [
-            {'minmax': {'columns': ['T', 'S'], 'feature_range': (0, 1), ...}},  # 相同方法，相同其他参数配置，在columns列表填写
+            {'minmax': {'columns': ['T', 'S'], 'feature_range': (0, 1),...}},  # 相同方法，相同其他参数配置，在columns列表填写
             {'minmax': {'columns': ['W'], 'feature_range': (-1, 1)}},  # 相同方法，但是其他参数配置与前一配置不同，允许在下一行填写
             {'standard': {'columns': ['P', 'Q']}},
             {'robust': {'columns': ['R'], 'quantile_range': (10, 90)}}
         ],
-        'skip_scale': ['is_night', 'Date Time']  # 跳过二分类，原始时间列
+        'skip_scale': ['is_night']  # 跳过二分类列
     }
+
+    window_config = {
+        'input_width': 6, 'label_width': 5, 'shift': 24, 'label_columns':['T','p']
+    }
+
 
     preparation_configs = [
         {'class': [DescribeData()], 'len_change': False},
@@ -93,10 +99,9 @@ def main():
                    BasedOnCorrSelector(pass_through=True),
                    UnifiedFeatureScaler(method_config=None, algorithm='cnn'),  # 自动根据数据分布及算法类型进行推荐标准化
                    CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__'),
-                   ], 'len_change': False}
-
-
-
+                   ], 'len_change': False},
+        {'class':[VisualizationForNeural()],'len_change':[False]},
+        {'class':[WindowGeneratorForNeural(**window_config)], 'len_change':[True]}
     ]
 
     # 1. 加载数据
@@ -109,17 +114,19 @@ def main():
 
     # 3. 数据预处理
     preparation = CompletePreprocessor(preparation_configs)
-    features_temp_train = preparation.train(features=df_train, labels=None)
+    features_temp_train = preparation.train(features=df_train, labels=None) # 窗口输出inputs,labels
     features_temp_val = preparation.transform(features=df_val, labels=None)
     features_temp_test = preparation.transform(features=df_test, labels=None)
 
+    stage = preparation.pipelines.get('pipeline_5') # 取第5个class里面的pipeline_5
+    cat_cols = stage.named_steps['engineer_4'].categorical_columns_ # 第 4step 的scaler
+    num_cols = stage.named_steps['engineer_5'].numeric_columns_ # 第 5step 的encoding
 
 
-    # 4. 采样 + 特征工程
 
-    # 5. 验证
+    # 4. 并行模型训练（需要+ val输入，参与模型训练）
 
-    # 3. 训练（内部已经配置好了所有清洗和特征工程步骤）
+
     preprocessor.train(raw_data, labels=None)
 
     # 4. 预测
@@ -144,45 +151,37 @@ config = [
 if __name__ == "__main__":
     main()
 
-# 画小提琴图（观察整个df标准化后的数据分布)
-df_std = preprocessor.get_data()
-df_std = df_std.melt(var_name='Column', value_name='normalized')  # 宽表变长表，数据形状匹配
 
-viz = Visualization()
-viz.violin_plot(df=df_std,
-                var_name='Column', value_name='normalized',  # Standardized
-                title="统计分布小提琴图")
+# """构建窗口数据"""
+# # 1 使用WindowGenerator类实例 构造窗口数据
+# df_train = preprocessor.get_train_val_test_data()[0]
+# df_val = preprocessor.get_train_val_test_data()[1]
+# df_test = preprocessor.get_train_val_test_data()[2]
 
-"""构建窗口数据"""
-# 1 使用WindowGenerator类实例 构造窗口数据
-df_train = preprocessor.get_train_val_test_data()[0]
-df_val = preprocessor.get_train_val_test_data()[1]
-df_test = preprocessor.get_train_val_test_data()[2]
-
-# 指定预测特征列
-single_window = WindowGenerator(input_width=6, label_width=5, shift=24, label_columns=['T', 'p'])
-print(single_window)
+# # 指定预测特征列
+# single_window = WindowGenerator(input_width=6, label_width=5, shift=24, label_columns=['T', 'p'])
+# print(single_window)
 
 # 2 构建训练集、验证集和测试集
-print('训练数据：')
-window_train_data = single_window.createDataset(df_train)
-print(window_train_data)
+# print('训练数据：')
+# window_train_data = single_window.createDataset(df_train)
+# print(window_train_data)
 # 正确获取inputs和labels的形状
 # createTrainSet()返回的是tf.data.Dataset对象，不是普通的元组列表
 # 必须使用TensorFlow的迭代机制：iter(), take()正确解包inputs和labels ：for... .take(1) / example有iter
-train_inputs, train_labels = single_window.example
-print(f"train_inputs 形状: {train_inputs.shape}")
-print(f"train_labels 形状: {train_labels.shape}")
+# train_inputs, train_labels = single_window.example
+# print(f"train_inputs 形状: {train_inputs.shape}")
+# print(f"train_labels 形状: {train_labels.shape}")
 
-print('验证数据：')
-window_val_data = single_window.createDataset(df_val)
-print(window_val_data)
-print('测试数据：')
-window_test_data = single_window.createDataset(df_test)
-print(window_test_data)
+# print('验证数据：')
+# window_val_data = single_window.createDataset(df_val)
+# print(window_val_data)
+# print('测试数据：')
+# window_test_data = single_window.createDataset(df_test)
+# print(window_test_data)
 
-# 画个训练集的图
-single_window.window_plot(plot_col='T')
+# # 画个训练集的图
+# single_window.window_plot(plot_col='T')
 
 # 基于历史6个时间点的天气情况（6行19列）预测经过24小时（shift=24)未来5个时间点 'T''p'列
 timeseries_cnn_model = CnnModel(architecture_type='parallel')  # 分支并行模式
