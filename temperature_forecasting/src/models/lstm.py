@@ -1,7 +1,6 @@
 import tensorflow as tf
-from pydantic import BaseModel, Field, PositiveInt
+from pydantic import BaseModel, Field, PositiveInt, field_validator
 from typing import List, Optional, Dict, Tuple
-from models.NeuralNetwork import EmbeddingConfig
 
 
 class LstmModel:
@@ -46,8 +45,8 @@ class LstmModel:
             self.model.add(tf.keras.layers.LSTM(units=u, activation='tanh',
                                                 return_sequences=s))  # shape[32,6,19]==>[32,64] tanh 将一个实数映射到（-1 1）的区间
             """
-            1.设置只在最后一个时间步产生输出:return_sequences=false
-            2.LSTM 层的参数总数【（64+19+1）*64】*4 == 【（上一轮输出+本轮输入）*（全联接输出）+（输出层偏置）】*4层（遗忘门*1+记忆门*2+输出门*1）
+            1.设置只在最后一个时间步产生输出:return_sequences=Fasle
+            2.LSTM 层的参数总数【（64+19+1）*64】*4 == 【（上一轮输出+本轮输入）*（全联接输出）+（全连接输出层偏置）】*4层（遗忘门*1+记忆门*2+输出门*1）
              -a. 如果LSTM是第1层，那么输入就是(64+inputs.shape[1])个特征值。
              -b. 如果是后续层，接在另一个LSTM层之后(且前一层的return_sequences=True),那么输入维度将是前一层的输出维度 64,总输入=64+64=128
             """
@@ -81,43 +80,55 @@ class LstmModel:
 
 class EnhancedLstmModel(LstmModel):
     class MultiModalConfig(LstmModel.SequentialConfig):
-        input_shape: Tuple[int, int] = Field(default=(6, 19))
+        input_width: int = Field(default=6)
+        output_width: int= Field(default=5, description="输出时间步步长。例如 5 表示预测5个时间步，每个时间步一个值")
         numeric_columns: List[str] = Field(default=[])
         categorical_columns: List[str] = Field(default=[])
         embedding_configs: Dict[str, Dict] = Field(default={},
                                                    description="分类列信息 {input_dim,input_length,output_dim,embeddings_regularizer}}")
-        output_configs: Dict[str, Dict] = Field(default={},
-                                                description="输出配置 {输出列: {type: regression/classification, ...}}")
+        output_config: Dict[str, Dict] = Field(..., description="输出配置 {输出列: {type: regression/classification, ...}}")
         learning_rate: float = Field(default=0.001)
         '''
-        output_configs = {
-            'temperature': {'type': 'regression', 'output_shape': (5, 1)},  # 5个时间步的回归 ,单特征输出 # 形状: (batch_size, 5, 1)
-            'weather_type': {'type': 'classification', 'output_shape': (5, 1), 'num_classes': 3},
-            'pressure': {'type': 'regression', 'output_shape': (5, 1)}
-        }
+        同CNN
         '''
 
-    def _bulid_multi_modal_lstm_model(self, config: dict = None):
-        model_config = self.MultiModalConfig(**(config or {}))
+        @field_validator('output_config')
+        def _validate_output_config(cls, v):
+            for label_name, config in v.items():
+                if not isinstance(config, dict):
+                    raise ValueError(f"输出配置 '{config}' 必须是字典")
+                # if not all(s in config for s in ['type','loss','metrics']):
+                #     missing = [s for s in ['type','loss','metircs']if s not in config]
+                requirements = {'type', 'loss', 'metrics'}
+                if not requirements.issubset(config.keys()):
+                    missing = requirements - set(config.keys())
+                    raise ValueError(f"配置缺少必需的字段: {missing}")
+                if config['type'] not in ['regression', 'classification', 'binary_classification']:
+                    raise ValueError(f"输出类型必须是 'regression' 或 'classification' 或 'binary_classification'")
 
-        input_shape = model_config.input_shape
+            return v
+
+    def _build_multi_modal_lstm_model(self, config: dict = None):
+        model_config = self.MultiModalConfig(**(config or {}))
+        input_width=model_config.input_width
+        output_width = model_config.output_width
         num_cols = model_config.numeric_columns
         cat_cols = model_config.categorical_columns
         embedding_configs = model_config.embedding_configs
-        output_configs = model_config.output_configs
+        output_config = model_config.output_config
         learning_rate = model_config.learning_rate
         units = model_config.units  # len控制lstm的层数
         return_sequences = model_config.return_sequences  # 是否只在最后一个时间步产生输出，对应LSTM层数
 
         numeric_input = tf.keras.layers.Input(
-            shape=(input_shape[0], len(num_cols)),
+            shape=(input_width, len(num_cols)),
             name='numeric_input'
         )
 
         categorical_inputs = []
         for col_name in cat_cols:
             cat_input = tf.keras.layers.Input(
-                shape=(input_shape[0],),  # (6, ) 表示6个时间步，1个特征
+                shape=(input_width,),  # (6, ) 表示6个时间步，1个特征
                 name=f"categorical_{col_name}_input"
             )
             categorical_inputs.append(cat_input)
@@ -148,49 +159,49 @@ class EnhancedLstmModel(LstmModel):
         loss_dict = {}
         metric_dict = {}
 
-        for output_name, output_config in output_configs.items():
-            output_shape = output_config['output_shape']
+        for output_name, config in output_config.items():
+            num_label = len(output_name)
 
             # 回归任务: 输出形状 (batch_size, 5, 1)
-            if output_config['type'] == 'regression':
-                output_layer = tf.keras.layers.Dense(output_shape[0] * output_shape[1],
+            if config['type'] == 'regression':
+                output_layer = tf.keras.layers.Dense(output_width * num_label,
                                                      name=f'dense_{output_name}')(x)
-                output_layer = tf.keras.layers.Reshape(output_shape,
+                output_layer = tf.keras.layers.Reshape((output_width, num_label),
                                                        name=f'reshape_{output_name}')(output_layer)
                 output_layer = tf.keras.layers.Activation('linear', name=f'activation_{output_name}')(output_layer)
 
-                loss_dict[f'output_{output_name}'] = output_config.get('loss', 'mse')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics', ['mae'])
+                loss_dict[f'output_{output_name}'] = config.get('loss', 'mse')
+                metric_dict[f'output_{output_name}'] = config.get('metrics', ['mae'])
 
             # 分类任务: 输出形状 (batch_size, 5, n_categories)
-            elif output_config['type'] == 'classification':
-                output_layer = tf.keras.layers.Dense(output_shape[0] * output_config['num_classes'],
+            elif config['type'] == 'classification':
+                output_layer = tf.keras.layers.Dense(output_width * config['num_classes'],
                                                      name=f'dense_{output_name}')(x)
-                output_layer = tf.keras.layers.Reshape((output_shape[0], output_config['num_classes']),
+                output_layer = tf.keras.layers.Reshape((output_width, config['num_classes']),
                                                        name=f'reshape_{output_name}')(output_layer)
                 output_layer = tf.keras.layers.Activation('softmax', name=f'activation_{output_name}')(output_layer)
 
-                loss_dict[f'output_{output_name}'] = output_config.get('loss', 'sparse_categorical_crossentropy')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics', ['accuracy'])
+                loss_dict[f'output_{output_name}'] = config.get('loss', 'sparse_categorical_crossentropy')
+                metric_dict[f'output_{output_name}'] = config.get('metrics', ['accuracy'])
 
-            elif output_config['type'] == 'binary_classification':
-                output_layer = tf.keras.layers.Dense(output_shape[0] * output_config['num_classes'],
+            elif config['type'] == 'binary_classification':
+                output_layer = tf.keras.layers.Dense(output_width * config['num_classes'],
                                                      name=f'dense_{output_name}')(x)
-                output_layer = tf.keras.layers.Reshape((output_shape[0], output_config['num_classes']),
+                output_layer = tf.keras.layers.Reshape((output_width, config['num_classes']),
                                                        name=f'reshape_{output_name}')(output_layer)
                 output_layer = tf.keras.layers.Activation('sigmoid', name=f'activation_{output_name}')(output_layer)
-                loss_dict[f'output_{output_name}'] = output_config.get('loss', 'binary_crossentropy')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics', ['accuracy'])
+                loss_dict[f'output_{output_name}'] = config.get('loss', 'binary_crossentropy')
+                metric_dict[f'output_{output_name}'] = config.get('metrics', ['accuracy'])
 
             else:
-                output_layer = tf.keras.layers.Dense(output_shape[0] * output_shape[1],
+                output_layer = tf.keras.layers.Dense(output_width * num_label,
                                                      name=f'dense_{output_name}')(x)
-                output_layer = tf.keras.layers.Reshape(output_shape,
+                output_layer = tf.keras.layers.Reshape((output_width, num_label),
                                                        name=f'reshape_{output_name}')(output_layer)
                 output_layer = tf.keras.layers.Activation('linear', name=f'activation_{output_name}')(output_layer)
 
-                loss_dict[f'output_{output_name}'] = output_config.get('loss', 'mse')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics', ['mae'])
+                loss_dict[f'output_{output_name}'] = config.get('loss', 'mse')
+                metric_dict[f'output_{output_name}'] = config.get('metrics', ['mae'])
 
             outputs.append(output_layer)
 

@@ -1,9 +1,14 @@
+import os
 from typing import List, Dict, Union
+
+import numpy as np
 import pandas as pd
+from joblib import Memory
 from pydantic import BaseModel, field_validator, model_validator, Field
 from sklearn.pipeline import Pipeline
 import logging
-from data.data_preparation import RemoveDuplicates
+from data.data_preparation.remove_duplicates import RemoveDuplicates
+from data.feature_engineering import UnifiedFeatureScaler, CategoricalEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +81,7 @@ class ProcessorConfig(BaseModel):  # 对应数据结构中的一个字典
                 if not hasattr(instance, 'transform'):
                     raise ValueError(f"实例 {instance} 缺少 transform 方法")
                 if not callable(getattr(instance, 'fit', None)):
-                    raise ValueError(f"实例 {instance} 的 fit 不是可调用方法") # 拦截字符串None等非可调用方法
+                    raise ValueError(f"实例 {instance} 的 fit 不是可调用方法")  # 拦截字符串None等非可调用方法
         return self
 
 
@@ -164,21 +169,26 @@ class CompletePreprocessor:
                     new = len(features_temp)
                     print(f"第{idx + 1}步完成: {old} -> {new} 样本")
 
-                self.fitted_cleaners[f'cleaner_{idx+1}'] = fitted_cleaners  # 阶段包含多个cleaners
+                self.fitted_cleaners[f'cleaner_{idx + 1}'] = fitted_cleaners  # 阶段包含多个cleaners
 
             else:
-                # 创建pipeline
-                pipeline = Pipeline([
-                    (f'engineer_{i+1}', engineer) for i, engineer in enumerate(class_obj_list)
-                ])
+                # 创建pipeline 并缓存
+                cachedir = f'./pipeline_cache/pipeline_{idx + 1}'
+                if not os.path.exists(cachedir):
+                    os.makedirs(cachedir)
+
+                memory = Memory(location=cachedir, verbose=0)
+
+                steps = [(f'engineer_{i + 1}', engineer) for i, engineer in enumerate(class_obj_list)]
+
+                pipeline = Pipeline(steps, memory=memory)
+
                 old = features_temp.shape
-
                 features_temp = pipeline.fit_transform(features_temp, labels_temp)
-
                 new = features_temp.shape
                 print(f"第{idx + 1}步完成: 生成 pipeline，sklearn pipeline不改变数据形状。数据形状:{old} -> {new}")
 
-                self.pipelines[f'pipeline_{idx+1}'] = pipeline
+                self.pipelines[f'pipeline_{idx + 1}'] = pipeline
 
         return features_temp, labels_temp
 
@@ -207,18 +217,60 @@ class CompletePreprocessor:
 
         return features_temp, labels_temp
 
+    def get_all_attributes(self):
+        all_attributes = {}  # {pipeline_1: steps_info}  steps_info={step_name:[attributes]}
+        for name, pipeline in self.pipelines.items():
+            all_attributes[name] = self._get_all_steps_info(pipeline)
+        return all_attributes
+
+    def _get_all_steps_info(self, pipeline):
+        steps_info = {}
+        for step_name in pipeline.named_steps.keys():
+            steps_info[step_name] = self._get_step_attributes(pipeline, step_name)
+        return steps_info
+
+    def _get_step_attributes(self, pipeline, step_name):
+
+        step = pipeline.named_steps[step_name]
+        attributes = {}
+
+        # 获取所有以下划线结尾的属性（sklearn 的惯例）
+        for attr_name in dir(step):
+            if attr_name.endswith('_') and not attr_name.startswith('_'):
+                attr_value = getattr(step, attr_name)
+                attributes[attr_name] = attr_value
+        return attributes
+
+    def get_specific_attribute(self, idx, step_name, attribute_name):
+        """获取指定步骤的特定属性"""
+        try:
+            step = self.pipelines.get(f'pipeline_{idx}').named_steps[step_name]
+            return getattr(step, attribute_name)
+        except(KeyError, AttributeError) as e:
+            print(f"获取属性失败: {e}")
+            return None
+
+
 
 if __name__ == '__main__':
-    d = {'feature1': [1, 23, 45, 45],
-         'feature2': [24, 67, 89, 89]}
+    d = {'feature1': np.random.normal(0, 1, 9),
+         'feature2': ['a', 'b', 'c', 'c', 'a', 'b', 'c', 'a', 'b']}
     raw_data = pd.DataFrame(d)
-    labels = pd.Series([0, 1, 1, 1])
-    config = {
-        'enabled': True,
-        'path': '~/Python/NeuralNetwork/temperature_forecasting/data/intermediate',
-        'filename': 'duplicate_rows.csv'}
+    labels = pd.Series([0, 1, 1, 1, 1, 3, 6, 7, 8])
 
-    configs2 = [{'obj_list': [RemoveDuplicates(download_config=config)], 'len_change': True}]
+    configs2 = [{'obj_list': [RemoveDuplicates()], 'len_change': True},
+                {'obj_list': [UnifiedFeatureScaler(algorithm='cnn'),
+                              CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__')],
+                 'len_change': False}]
     obj = CompletePreprocessor(configs2)
     obj.train(raw_data, labels)
-    features_temp, labels_temp = obj.transform(raw_data, labels)
+    all_attributes = obj.get_all_attributes()
+    print(all_attributes)
+
+    b = obj.get_specific_attribute(2, 'engineer_1', 'numeric_columns_')
+    print(f'应该结果是：[feature1] ，结果{b}')
+
+    a = obj.get_specific_attribute(2, 'engineer_2', 'categorical_columns_')
+    print(f'应该结果是：[feature2] ，结果{a}')
+
+    # features_temp, labels_temp = obj.transform(raw_data, labels)

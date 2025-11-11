@@ -1,2 +1,2 @@
 from .model_evaluation import ModelEvaluation
-from .visualization import history_plot
+from .model_visualization import history_plot

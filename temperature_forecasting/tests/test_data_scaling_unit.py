@@ -1,4 +1,4 @@
-from data.feature_engineering.scalers import (UnifiedFeatureScaler, SmartScalerSelector, StatisticsCalculation,
+from data.feature_engineering.feature_scaling import (UnifiedFeatureScaler, SmartScalerSelector, StatisticsCalculation,
                                               ConfigParser,
                                               MethodConfig, ScalerFactory)
 

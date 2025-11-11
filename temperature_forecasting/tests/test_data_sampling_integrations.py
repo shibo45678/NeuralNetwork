@@ -3,7 +3,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.datasets import make_classification
-from data.data_preprocessing.sampling import SystematicResampler
+from data.data_preprocessing.data_sampling import SystematicResampler
 
 
 class TestResamplerIntegration:

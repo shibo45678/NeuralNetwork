@@ -1,7 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, PositiveInt
 from typing import List, Optional, Dict, Tuple
 import os
-import pandas as pd
 
 # 在模型文件的开头设置
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # 最严格的设置
@@ -247,17 +246,18 @@ class CnnModel:
 
 class EnhancedCnnModel(CnnModel):
     class MultiModalConfig(CnnModel.ParallelConfig):
+        input_width:int = Field(default=6,description="输入时间步步长")
+        label_width:int = Field(default=5,description="输出时间步步长")
         numeric_columns: List[str] = Field(default=[], description="数值列名称")
         categorical_columns: List[str] = Field(default=[], description="分类列名称")
         embedding_info: Dict[str, Dict] = Field(default={},
                                                 description="分类列信息 {input_dim,input_length,output_dim,embeddings_regularizer}}")
-        output_configs: Dict[str, Dict] = Field(default={},
-                                                description="输出配置 {输出列: {type: regression/classification, ...}}")
+        output_config: Dict[str, Dict] = Field(..., description="输出配置 {输出列: {type: regression/classification,binary_classification ...}}")
         learning_rate: float = Field(default=0.001)
         '''
         参数说明：
-        output_configs: 输出配置字典(每个输出特征单独一层)
-        output_configs = {
+        output_config: 输出配置字典(每个输出特征单独一层)
+        output_config = {
                     'temperature': {'type': 'regression', # 单变量回归
                                     'loss':'mse',
                                     'metrics':['mae'],
@@ -284,49 +284,47 @@ class EnhancedCnnModel(CnnModel):
                     }
         '''
 
-        @field_validator('dataset')
-        def validate_dataset(cls, v):
-            if v is not None and not isinstance(v, pd.DataFrame):
-                raise ValueError("必须是pandas DataFrame或None")
-            return v
 
-        @field_validator('output_configs')
-        def _validate_output_configs(cls, v):
-            for output_name, config in v.items():
+        @field_validator('output_config')
+        def _validate_output_config(cls, v):
+            for label_name, config in v.items():
                 if not isinstance(config, dict):
-                    raise ValueError(f"输出配置 '{output_name}' 必须是字典")
-                if 'type' not in config:
-                    raise ValueError(f"输出配置 '{output_name}' 必须包含 'type' 字段")
-                if config['type'] not in ['regression', 'classification']:
-                    raise ValueError(f"输出类型必须是 'regression' 或 'classification'")
+                    raise ValueError(f"输出配置 '{config}' 必须是字典")
+                requirements = {'type','loss','metrics'}
+                if not requirements.issubset(config.keys()):
+                    missing = requirements - set(config.keys())
+                    raise ValueError(f"配置缺少必需的字段: {missing}")
+                if config['type'] not in ['regression', 'classification','binary_classification']:
+                    raise ValueError(f"输出类型必须是 'regression' 或 'classification' 或 'binary_classification'")
 
             return v
 
-    def _build_multi_modal_cnn_mode(self, config: dict = None) -> tf.keras.Model:
+    def _build_multi_modal_cnn_model(self, config: dict = None) -> tf.keras.Model:
         model_config = self._validate_config(config, self.MultiModalConfig)
 
-        input_shape = model_config.input_shape
-        output_shape = model_config.output_shape
+        input_width = model_config.input_width
+        output_width = model_config.output_width
+        num_cols = model_config.numeric_columns
+        cat_cols = model_config.categorical_columns
+        embedding_configs = model_config.embedding_configs
+        output_config = model_config.output_config
+
         branch_filters = model_config.branch_filters
         branch_kernels = model_config.branch_kernels
         branch_dilation_rate = model_config.branch_dilation_rate
         activation = model_config.activation
-        num_cols = model_config.numeric_columns
-        cat_cols = model_config.categorical_columns
-        embedding_configs = model_config.embedding_configs
-        output_configs = model_config.output_configs
         learning_rate = model_config.learning_rate
 
         # 分类列Embedding层的判断
         numeric_input = tf.keras.layers.Input(
-            shape=(input_shape[0], len(num_cols)),
+            shape=(input_width, len(num_cols)),
             name='numeric_input'
         )
 
         categorical_inputs = []
         for col_name in cat_cols:
             cat_input = tf.keras.layers.Input(
-                shape=(input_shape[0],),  # (6, ) 表示6个时间步，1个特征
+                shape=(input_width,),  # (6, ) 表示6个时间步，1个特征
                 name=f"categorical_{col_name}_input"
             )
             categorical_inputs.append(cat_input)
@@ -396,62 +394,61 @@ class EnhancedCnnModel(CnnModel):
 
         # 转置卷积-进行时间步后续的调整 (batch_size,timesteps,32) 与输入形状相同的时间步数,使输出长度 = 输入长度 × strides
         x = tf.keras.layers.Conv1DTranspose(filters=32, kernel_size=3, padding='same')(x)
-        x = x[:, :output_shape[0], :]  # 裁剪到5个时间步 (32, 5, 2)
+        x = x[:, :output_width, :]  # 裁剪到5个时间步 (32, 5, 2)
 
         # 多任务输出层
         outputs = []
         loss_dict = {}
         metric_dict = {}
 
-        for output_name, output_config in output_configs.items():
-            output_shape = output_config['output_shape']
-
-            if output_config['type'] == 'regression':
+        for output_name, config in output_config.items():
+            num_label = len(output_name)
+            if config['type'] == 'regression':
                 # 回归输出
                 output_layer = tf.keras.layers.Conv1D(
-                    filters=output_shape[1],  # 单特征输出
+                    filters=num_label,  # 单特征输出
                     kernel_size=1,
                     activation='linear',
                     padding='same',
                     name=f'output_{output_name}'
                 )(x)
-                loss_dict[f'output_{output_name}'] = output_config.get('loss','mse')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics',['mae'])
+                loss_dict[f'output_{output_name}'] = config.get('loss','mse')
+                metric_dict[f'output_{output_name}'] = config.get('metrics',['mae'])
 
-            elif output_config['type'] == 'classification':
+            elif config['type'] == 'classification':
                 # 分类任务：输出 (batch_size, output_timesteps, num_classes)
                 output_layer = tf.keras.layers.Conv1D(
-                    filters=output_shape[1] * output_config['num_classes'],
+                    filters=num_label * config['num_classes'],
                     kernel_size=1,
                     activation='softmax',
                     padding='same',
                     name=f'output_{output_name}'
                 )(x)
-                loss_dict[f'output_{output_name}'] = output_config.get('loss','sparse_categorical_crossentropy')
-                metric_dict[f'output_{output_name}'] =output_config.get('metrics',['accuracy'])
+                loss_dict[f'output_{output_name}'] = config.get('loss','sparse_categorical_crossentropy')
+                metric_dict[f'output_{output_name}'] =config.get('metrics',['accuracy'])
 
-            elif output_config['type'] == 'binary_classification':
+            elif config['type'] == 'binary_classification':
                 output_layer = tf.keras.layers.Conv1D(
-                    filters=output_shape[1] * output_config['num_classes'],
+                    filters=num_label * config['num_classes'],
                     kernel_size=1,
                     activation='sigmoid',
                     padding='same',
                     name=f'output_{output_name}'
                 )(x)
-                loss_dict[f'output_{output_name}'] = output_config.get('loss','binary_crossentropy')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics',['accuracy'])
+                loss_dict[f'output_{output_name}'] = config.get('loss','binary_crossentropy')
+                metric_dict[f'output_{output_name}'] = config.get('metrics',['accuracy'])
 
             else:
                 # 默认情况：使用回归配置
                 output_layer = tf.keras.layers.Conv1D(
-                    filters=output_shape[1],
+                    filters=num_label,
                     kernel_size=1,
                     activation='linear',
                     padding='same',
                     name=f'output_{output_name}'
                 )(x)
-                loss_dict[f'output_{output_name}'] = output_config.get('loss', 'mse')
-                metric_dict[f'output_{output_name}'] = output_config.get('metrics', ['mae'])
+                loss_dict[f'output_{output_name}'] = config.get('loss', 'mse')
+                metric_dict[f'output_{output_name}'] = config.get('metrics', ['mae'])
 
             outputs.append(output_layer)
 

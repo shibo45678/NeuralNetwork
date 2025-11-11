@@ -1,5 +1,5 @@
 import pandas as pd
-from data.feature_engineering.timeseries_col_processor import ProcessTimeseriesColumns, TimeTypeConverter
+from data.feature_engineering.feature_generation_from_time import ProcessTimeseriesColumns, TimeTypeConverter
 import numpy as np
 
 
@@ -31,7 +31,7 @@ def test_process_timeseries_columns():
     print("数据类型:", df_mixed['mixed_time'].dtype)
 
     try:
-        processor = ProcessTimeseriesColumns(col='mixed_time',auto_detect_string_format=True)
+        processor = ProcessTimeseriesColumns(col='mixed_time', auto_detect_string_format=True)
         processor.fit(df_mixed)
         result_mixed = processor.transform(df_mixed)
         print("✅ 混合数据已处理")
@@ -51,7 +51,7 @@ def test_process_timeseries_columns():
         'value': [1, 2, 3, 4, 5],
         'perfect_seconds': [1633046400, 1633046401, 1633046402, 1633046403, 1633046406],
         'mixed_time': [1633046400, 1633046400, 1633046400, 1633046403.412, 1633046403.412],
-        'excel_time': [44927, 44928, 44929, 44929.1,44930.1],
+        'excel_time': [44927, 44928, 44929, 44929.1, 44930.1],
         'excel_wrong_time': [44927, 44928, 44929, 4430, 44929]
 
     })
@@ -155,7 +155,7 @@ def test_process_timeseries_columns():
         result_empty = processor.transform(df_empty)
         print("✅ 空DataFrame处理成功")
     except Exception as e:
-        print(f"❌ 空DataFrame处理结果: {e}") # 抛出空数据集的错
+        print(f"❌ 空DataFrame处理结果: {e}")  # 抛出空数据集的错
 
     # 测试9: 季节 is night，time_of_day 划分正确性
     print("\n9. 测试季节划分正确性")
@@ -169,13 +169,15 @@ def test_process_timeseries_columns():
         processor.fit(df_seasons)
         result_seasons = processor.transform(df_seasons)
         print("✅ 季节划分测试")
-        season_months = result_seasons[['date', 'season','is_night','timedelta','days_since_start','years_since_start']].copy()
+        season_months = result_seasons[
+            ['date', 'season', 'is_night', 'timedelta', 'days_since_start', 'years_since_start']].copy()
         season_months['datetime'] = pd.to_datetime(season_months['date'], unit='s')
-        print(season_months[['date','datetime', 'season','is_night','timedelta','days_since_start','years_since_start']].to_string(index=False))
+        print(season_months[['date', 'datetime', 'season', 'is_night', 'timedelta', 'days_since_start',
+                             'years_since_start']].to_string(index=False))
 
         # 检查季节划分是否正确
         # 当使用分类变量分组时，pandas 默认会显示所有可能的分类组合（即使某些分类在数据中不存在
-        season_mapping = result_seasons.groupby('is_night',observed=True)['date'].count()
+        season_mapping = result_seasons.groupby('is_night', observed=True)['date'].count()
         print("各季节数据点数量:", season_mapping.to_dict())
 
     except Exception as e:

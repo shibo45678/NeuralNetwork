@@ -46,7 +46,6 @@ class TestRemoveDuplicates:
         cleaner = RemoveDuplicates()
         assert cleaner.pass_through is False
         assert cleaner.download_config['enabled'] is False
-        assert cleaner._has_downloaded is False
 
     def test_initialization_custom_config(self):
         """测试自定义配置初始化"""

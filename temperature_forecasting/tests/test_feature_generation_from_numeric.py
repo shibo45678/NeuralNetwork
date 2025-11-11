@@ -1,14 +1,14 @@
 
-from data.feature_engineering.process_other_cols import ProcessOtherColumns
+from data.feature_engineering.feature_generation_from_numeric import GenerationFromNumeric
 
 import pandas as pd
 
 
 def test_process_other_columns():
-    """全面测试 ProcessOtherColumns 类的各种边界情况"""
+    """全面测试 GenerationFromNumeric 类的各种边界情况"""
 
     print("=" * 60)
-    print("开始全面测试 ProcessOtherColumns")
+    print("开始全面测试 GenerationFromNumeric")
     print("=" * 60)
 
     # 测试1: 正常的风向风速数据
@@ -21,7 +21,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['wind_direction'],
             var_cols=['wind_speed', 'max_wind_speed']
         )
@@ -43,7 +43,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['wd'],
             var_cols=['wv']  # 只提供平均风速
         )
@@ -62,7 +62,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['nonexistent_dir'],
             var_cols=['nonexistent_var']
         )
@@ -82,7 +82,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(dir_cols=None, var_cols=None)
+        processor = GenerationFromNumeric(dir_cols=None, var_cols=None)
         processor.fit(df_empty_params)
         result_empty = processor.transform(df_empty_params)
         print("✅ 空参数处理成功（应该跳过处理）")
@@ -99,7 +99,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['direction', 'missing_dir'],  # 一个存在，一个不存在
             var_cols=['speed', 'missing_var']  # 一个存在，一个不存在
         )
@@ -120,7 +120,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['wind_dir'],
             var_cols=['wind_vel', 'max_vel']
         )
@@ -146,7 +146,7 @@ def test_process_other_columns():
     })
 
     try:
-        processor = ProcessOtherColumns(
+        processor = GenerationFromNumeric(
             dir_cols=['dir'],
             var_cols=['speed', 'max_speed']
         )

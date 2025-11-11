@@ -1,48 +1,16 @@
-# 神经网络的特征选择可选跳过：pass through (类型）
-# 1.分割数据集
-# 2.标准化 / 编码 可识别数值/分类->模型内部时已经编码标准化 都变成数值型（除非接入处理编码和标准化的步骤）
-# 3.窗口
-# __init__(output_configs=None, model_type='cnn', 窗口类 input_width=24, label_width=1, shift=1,batch_size=32, 训练类的epochs=100
-
-# ------------------------------------------__fit__------------------------------------------
-# _create_window_data : 获取窗口处理后的 datasets（inputs和outputs）dataset = self.window_generator.createDataset( 整体数据 X_processed)
-#  -> a. split-datasets 获取  trainsets 和 validsets
-#  -> b.是否还要根据数值和分类型调整形状？窗口不变还是？不变还需不需要调整形状 self.output_configs （enbedding / 窗口形状）- > output_name..regression
-
-
-# _build_multi_task_model 构建模型：
-# a. 共有部分 def：自动配置Embedding（如果有分类的）
-# b. if-else分支判断使用模型的类型：cnn/lstm/混合 hybrid_model CNN提取特征 + LSTM时序建模 self.model_cnn = self._build_multi_task_model(X_windowed.shape[1:])
-#    --> 如果有分类列 ， 自动配置 inputs - Embedding
-#    --> 共同的模型构建
-#    --> 输出层调整（每个输出1个层）损失函数等
-
-# 4. self.model.fit() 训练模型（参数需要trainsets valsets）
-
-# return self
-
-# ------------------------------------------__predict__------------------------------------------
-# 1. preprocessor_.transform(X)：
-# 数据准备transform 预处理和特征处理内容 ：self.preprocessor.transform(X)-> 新数据
-# 2._create_prediction_windows ：
-# 获取窗口数据 testsets / newdata : testdataset = self.window_generator.make_dataset(test)
-# 3. 模型预测 predictions = self.model.predict(dataset)
-# 4. 逆转换回原数据 self._format_predictions(predictions) / 标签编码
-
 import os
 import joblib
+from pydantic.v1 import validate_arguments
+from pydantic import Field
+from sklearn.utils.validation import check_is_fitted
+from data.decorator import validate_input
 from models.cnn import EnhancedCnnModel
 from models.lstm import EnhancedLstmModel
 from training import TrainingModel
 from data.windows import WindowGenerator
-from evaluation.metrics import ModelEvaluation
-from data.decorator import validate_input, validate_output
-from typing import Optional, Dict, List, Tuple, Literal, Union
-from pydantic import BaseModel, model_validator, Field, field_validator
+from evaluation.model_evaluation import ModelEvaluation
 from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
-from sklearn.utils.validation import check_is_fitted
 import tensorflow as tf
-import numpy as np
 import pandas as pd
 from tensorflow.python.keras.regularizers import l2
 import logging
@@ -50,264 +18,169 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class OutputConfig(BaseModel):
-    """数据填充方法的配置类型"""
-    output_configs: Dict[str, Dict] = Field(default={},
-                                            description="输出配置 {输出列: {type: regression/classification, ...}}")
-
-    @field_validator('output_configs')
-    def _validate_output_configs(cls, v):
-        """只验证新增参数"""
-        for output_name, config in v.items():
-            if not isinstance(config, dict):
-                raise ValueError(f"输出配置 '{output_name}' 必须是字典")
-            if 'type' not in config:
-                raise ValueError(f"输出配置 '{output_name}' 必须包含 'type' 字段")
-            if config['type'] not in ['regression', 'classification']:
-                raise ValueError(f"输出类型必须是 'regression' 或 'classification'")
-
-        return v
-
-
-# 注意时间等不处理的列在模型里面怎么弄的 非数值非分类
-# # 模型参数
-# cnn_model_config = {
-#     self._init_params['cnn_model_config']
-# }
-#
-# input_shape = model_config.input_shape
-# output_shape = model_config.output_shape
-# branch_filters = model_config.branch_filters
-# branch_kernels = model_config.branch_kernels
-# branch_dilation_rate = model_config.branch_dilation_rate
-# activation = model_config.activation
-#
-# self._init_params['lstm_model_config']
-# lstm_model_config={
-# input_shape = model_config.input_shape
-#         output_configs = model_config.output_configs
-#         learning_rate = model_config.learning_rate
-#         units = model_config.units  # len控制lstm的层数
-#         return_sequences = model_config.return_sequences  # 是否只在最后一个时间步产生输出，对应LSTM层数
-#
-# }
-# TrainingModel(model_name:str,
-#
-#                 epochs: int = 20, # 总轮数
-#                 verbose: int = 2
-# weights_path f"best_model_{model_name}_weights.h5"
-# time_col_name
-
 class TimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
-    def __init__(self, output_configs, **kwargs):  # 标准化
+    @validate_arguments
+    def __init__(self,
+                 model_config: dict = Field(..., description="必须提供包括模型配置（output_config）在内的、窗口配置。")):
         """
-        参数说明：
-        - output_configs: 输出配置字典(每个输出特征单独一层)
-                output_configs = {
-                    'temperature': {'type': 'regression', # 单变量回归
-                                    'loss':'mse',
-                                    'metrics':['mae'],
-                                    'units': 1,  #  每个时间步预测n个特征
-                                    },
-
-                    'weather_metrics': {'type': 'regression', # 多变量回归：比如经度和纬度
-                                        'loss':'mse',
-                                        'metrics':['mae'],
-                                        'units': 4,           # 每个时间步预测4个指标
-                                        },
-
-                    'event_occurrence': {'type': 'binary_classification', # 二分类
-                                        'loss':'binary_crossentropy',
-                                        'metrics':['accuracy'],
-                                        'units': 1,
-                                        },
-
-                    'weather_type': {'type': 'classification', # 多分类
-                                    'loss':'sparse_categorical_crossentropy',
-                                    'metrics':['accuracy'],
-                                    'num_classes': 3,
-                                    },
-                    }
-        - 分割数据集参数：略
-        - 标准化参数：略
-        - 窗口参数:略
-        - 训练参数: 略
+        Parameters:
+        -----------
+        model_config : dict, optional
+            模型配置，用于训练新模型。通过各自模型进行参数验证
+        saved_model_path : str, optional
+            已保存模型路径，如果提供则直接使用保存的模型
         """
+        self.model_config = model_config or {}
+        self.weights_dir = f"best_model_{self.model_config['model_type']}_weights"
+        self.best_checkpoint = None
 
-        output_config_obj = OutputConfig(output_configs=output_configs or {})  # 直接创建实例
-        self.output_configs = output_config_obj.output_configs
-        self._init_params = kwargs  # 其他参数验证放在各自类
-
-        # 设置属性以便sklearn的get_params工作
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-        self.window_generator_ = None
-        self.model_ = None
+        self.training_model_ = None  # 训练过程中使用的模型（可能包含dropout等）
+        self.prediction_model_ = None  # 专门用于预测的最佳模型（已加载最佳权重）
         self.is_fitted_ = False
-        self.numeric_columns_ = {}
-        self.categorical_columns_ = {}
-        self.embedding_info = {}
-        self.val_dataset_ = pd.DataFrame()
-        self.train_dataset_ = pd.DataFrame()
+        self.embedding_info_ = {}
+        self.history_ = None
+        self.train_window_data = None
+        self.val_window_data = None
+        self.test_window_data = None
+        self.window = self._create_window_generator()
 
-        self.weights_path = f"best_model_{self.model_name}_weights.h5"
-        self.history = None
+    def fit(self, X, y=None):
+        # 写出数据源
+        train_datasets = X['train_datasets']
+        val_datasets = X['val_datasets']
 
-    def fit(self, X, y=None):  # train_X
-        """
-        fit方法 - 支持从外部传入预处理器
-        Args:
-            X: 输入数据
-            y: 目标数据（可选，对于多任务学习，目标可能在X中）
-            preprocessor: 外部预处理器，如果为None则自动创建
-        """
-        df = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X
 
-        # 1. 保存特征列信息 / 时间等 怎么处理
-        self.feature_columns_num =
-        self.feature_columns_cat =
+        # 1.处理窗口数据
+        train_window_data = self.window.createDataset(train_datasets)
+        val_window_data = self.window.createDataset(val_datasets)
 
-        # # 2. 分割数据集
-        # train_X, val_X, = self._split_dataset(X)
-        #
-        # # 3. 内置标准化 + 编码
-        # train_X_scaled = self._fit_transform_scaler(train_X)
-        # val_X_scaled = self.  # 应用transform
-        # test_X_scaled =
-        # # 目前顺序就是原来的顺序 并没有将数值和分类分开
-
-        # 4. 创建窗口数据
-        self.window_generator_ = self._create_window_generator()
-        self.train_dataset_ = self.window_generator_.createDataset(train_X_scaled)  # inputs  / outputs
-        self.val_dataset_ = self.window_generator_.createDataset(val_X_scaled)
-        self.test_dataset_ = self.window_generator_.createDataset(test_X_scaled)
-
-        # 5. 构建模型
-        # 5.1 获得embedding_info
-        self.embedding_info = EmbeddingConfig._get_embedding_info(self.train_dataset_,
-                                                                  self.categorical_columns_,
-                                                                  self._init_params['input_shape'])
-        # 5.2 选择模型
-        if self.model_type == 'cnn':
+        # 2. 构建模型 （神经网络预处理已经返回了模型期望的正确格式，不copy）
+        # 1.1 获得embedding_info
+        self.embedding_info = EmbeddingConfig._get_embedding_info(train_datasets,  # 原始DF
+                                                                  self.model_config['categorical_columns'],
+                                                                  self.model_config['input_shape'])
+        # 1.2 选择模型
+        if self.model_config['model_type'].startswith('cnn'):
+            cnn_model_config = {**self.model_config['cnn_model_config'],  # 解包
+                                'embedding_configs': self.embedding_info}  # 追加
             cnn_model = EnhancedCnnModel()
-            cnn_model._build_multi_modal_cnn_model(self._init_params['cnn_model_config'],  # 修改成整体的configs
-                                                   self.numeric_columns_,
-                                                   self.categoric_columns_,
-                                                   self.embedding_info)
-            self.model_ = cnn_model
+            cnn_model._build_multi_modal_cnn_model(cnn_model_config),
+            self.training_model_ = cnn_model
 
-        elif self.model_type == 'lstm':
+        elif self.model_config['model_type'].startswith('lstm'):
+            lstm_model_config = {**self.model_config['lstm_model_config'],
+                                 'embedding_configs': self.embedding_info}
             lstm_model = EnhancedLstmModel()
-            lstm_model._build_multi_modal_lstm_model(
-                self._init_params['lstm_model_config'],
-                self.numeric_columns_,
-                self.categoric_columns_,
-                self.embedding_info
-            )
-            self.model_ = lstm_model
+            lstm_model._build_multi_modal_lstm_model(lstm_model_config)
+            self.training_model_ = lstm_model
 
-        # 6. 训练模型
-        self.history_ = TrainingModel(model_name=self._init_params['model_name'],
-                                      model=self.model_,
-                                      trainset=self.train_dataset_,
-                                      valset=self.val_dataset_,
-                                      verbose=self._init_params['verbose'],
-                                      epochs=self._init_params['epochs'],
-                                      weights_path=self.weights_path)
+        # 3. 训练模型
+        # 确保目录存在(立即创建)
+        os.makedirs(self.weights_dir, exist_ok=True)
+        self.history_, best_checkpoint = TrainingModel(model_name=self.model_config['model_name'],
+                                                       model=self.training_model_,
+                                                       trainset=train_window_data,
+                                                       valset=val_window_data,
+                                                       verbose=self.model_config['verbose'],
+                                                       epochs=self.model_config['epochs'],
+                                                       weights_dir=self.weights_dir)  # 目录
+        # 保存最佳检查点路径供后续使用
+        self.best_checkpoint = best_checkpoint
+
+        # 训练完成后，创建用于预测的模型
+        self._prediction_model = self.reconstruct_model()
+
+        # 4. 评估模型
+        self.evaluate_model(dataset=val_window_data, dataset_type='val')
 
         self.is_fitted_ = True
 
         return self
 
+    @validate_input(validate_y=False)
     def predict(self, X):
-
         check_is_fitted(self)
-
-        # 确保使用最佳权重
-        if hasattr(self, 'weights_path') and os.path.exists(self.weights_path):
-            self.model_.load_weights(self.weights_path)
 
         X_ = pd.DataFrame(X) if not isinstance(X, pd.DataFrame) else X.copy()
 
-        # 1. 标准化 + 编码
-        X_scaled = self.scaler_.tranform()
+        # 1. 处理窗口数据
+        predict_window_data = self.window.createDataset(X_)
 
-        # 2. 窗口化
-        window_data = self.window_generator_.createDataset(X_scaled)
+        # 2. 重构模型
+        if self.prediction_model_ is None:
+            self._prediction_model = self.reconstruct_model()  # 确保使用最佳权重
 
-        predictions = self.model_.predict(window_data)
+        # 3. 模型预测
+        predictions = self._prediction_model.predict(predict_window_data)
 
-        # 处理时间列
-        historical_timestamps = X_[self._init_params['time_col_name']].copy()
+        # 4. 恢复未使用时间列
+        historical_timestamps = X_[self.model_config['time_column']].copy()
 
         last_time = historical_timestamps.iloc[-1]
-        steps_ahead = self._init_params['label_width']  # 默认预测步长
+        steps_ahead = self.model_config['label_width']  # 默认预测步长
 
-        future_timestamps = self._generate_futrue_timestamps(last_time, self._init_params['label_width'], 'H')
+        future_timestamps = self._generate_future_timestamps(last_time, self.model_config['label_width'], 'H')
 
         predictions_ = pd.DataFrame({
             'timestamp': future_timestamps,
-            'prediction': predictions.flatten()[:steps_ahead]  # # 确保长度匹配
+            'prediction': predictions.flatten()[:steps_ahead]  # 确保长度匹配
         })
 
-        return self._format_predicitons(predictions_)  # 整数编码的回溯
+        return predictions_
 
     def _create_window_generator(self):
-        """创建窗口生成器 - 基于你的现有WindowGenerator"""
 
         window = WindowGenerator(
-            input_width=self._init_params['input_width'],
-            label_width=self._init_params['label_width'],
-            shift=self._init_params['shift'],
-            label_columns=list(self.output_configs.keys())
+            input_width=self.model_config['input_width'],
+            label_width=self.model_config['label_width'],
+            shift=self.model_config['shift'],
+            label_columns=list(self.model_config['output_config'].keys())
         )
 
         return window
 
-    def evaluate(self):
-        metrics = ModelEvaluation(self.output_configs, model_name=self._init_params['model_name'])
-        metrics.comprehensive_model_evaluation(model=self.model_,
-                                               window=self.window_generator_,
-                                               valsets=self.val_dataset_,
-                                               testsets=self.test_dataset_)
-
     def reconstruct_model(self):
-        """加载训练好的模型"""
+        """重构用于预测的干净模型"""
 
-        if not hasattr(self, 'weights_path') or not os.path.exists(self.weights_path):
-            raise ValueError('权重文件不存在，请先训练模型')
+        if not hasattr(self, 'best_checkpoint'):
+            raise ValueError('未找到最佳模型检查点')  # 现在改为分片 / 训练里面也有
 
-        if hasattr(self.model_, '_input_shape'):
-            input_shape = self.model_._input_shape
+        if hasattr(self.training_model_, '_input_shape'):
+            input_shape = self.training_model_._input_shape
         else:
-            input_shape = self.model_.input_shape[1:]  # 去掉batch维度
+            input_shape = self.training_model_.input_shape[1:]  # 去掉batch维度
 
         # 克隆模型结构
-        reconstructed_model = tf.keras.models.clone_model(self.model_)
+        reconstructed_model = tf.keras.models.clone_model(self.training_model_)
         reconstructed_model.build((None,) + input_shape)  # 加上 batch
 
-        # 重新编译（用于预测）
-        self._compile_model(reconstructed_model)
-
         # 加载权重
-        reconstructed_model.load_weights(self.weights_path)
+        reconstructed_model.load_weights(self.best_checkpoint)
+
+        # 重新编译（用于预测）
+        self._compile_for_prediction_model(reconstructed_model)
 
         return reconstructed_model
 
-    def _generate_futrue_timestamps(self, last_time, n_steps, freq):
-        return pd.date_range(start=last_time + self._init_params['shift'], periods=n_steps, freq=6 * freq)
+    def evaluate_model(self, dataset, dataset_type='val'):
+        """用任意数据评估已训练好的模型"""
+        model = self.reconstruct_model()
 
-    def _format_predicitons(self, data):
+        metrics = ModelEvaluation(self.model_config['output_config'], model_name=self.model_config['model_name'])
+        metrics.comprehensive_model_evaluation(model=model,  # 评估 best_model
+                                               window=self.window,
+                                               dataset=dataset,
+                                               dataset_type=dataset_type)
 
-    # 分类列
-    # 时间列
+    def _generate_future_timestamps(self, last_time, n_steps, freq):
+        return pd.date_range(start=last_time + self.model_config['shift'], periods=n_steps, freq=6 * freq)
 
-    def _compile_model(self, model):
-        if hasattr(self, 'model_') and hasattr(self.model_, 'optimizer'):
-            optimizer = self.model_.optimizer
+    def _compile_for_prediction_model(self, model):  # 同一Python进程中直接获取实例。独立的演化路径
+        if hasattr(self, 'training_model_') and hasattr(self.training_model_, 'optimizer'):
+            optimizer = self.training_model_.optimizer  # 可以用实例，load可以用配置
         else:
-            optimizer = 'adam'
+            learning_rate = self.model_config.get('learning_rate', 0.001)  # 保证学习率一致
+            optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
 
         # 单输出或者多输出都可以使用字典，但是要保证输出层名字正确
         loss_config = self._get_loss_config()
@@ -319,24 +192,38 @@ class TimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
             metrics=metrics_config
         )
 
+    def _get_compile_config_for_save(self):  # 磁盘恢复传递字典get_config()
+        if hasattr(self, 'training_model_') and self.training_model_.optimizer:
+            optimizer_config = self.training_model_.optimizer.get_config()  # 使用 get_config() 获取可序列化的配置
+        else:
+            # 回退逻辑
+            learning_rate = self.model_config.get('learning_rate', 0.001)
+            default_optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+            optimizer_config = default_optimizer.get_config()
+
+        return {
+            'optimizer': optimizer_config,
+            'loss': self._get_loss_config(),
+            'metrics': self._get_metrics_config()
+        }
+
     def _get_loss_config(self):
-        if not hasattr(self, 'output_configs') or not self.output_configs:
-            # 默认配置
-            loss = 'mse'
+        if not hasattr(self, 'output_config') or not self.model_config['output_config']:
+            loss = 'mse'  # 重构在训练之后，训练已经检查output_config 不为空
         else:
             loss = {}
-            for output_name, config in self.output_configs.items():
+            for output_name, config in self.model_config['output_config'].items():
                 loss[f'output_{output_name}'] = config.get('loss', self._get_default_loss(config['type']))
 
         return loss
 
     def _get_metrics_config(self):
         """统一的metrics配置"""
-        if not hasattr(self, 'output_configs') or not self.output_configs:
-            metrics = ['mae']  # 默认
+        if not hasattr(self, 'output_config') or not self.model_config['output_config']:
+            metrics = ['mae']  # 重构在训练之后，训练已经检查output_config 不为空
 
         metrics = {}
-        for output_name, config in self.output_configs.items():
+        for output_name, config in self.model_config['output_config'].items():
             metrics[f'output_{output_name}'] = config.get('metrics', self._get_default_metrics(config['type']))
 
         return metrics
@@ -353,14 +240,119 @@ class TimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
             'binary_classification': ['accuracy']
         }[type]
 
-    def save(self, filepath):  # .pkl
+    def clear_prediction_cache(self):
+        """清空预测缓存"""
+        if hasattr(self, '_prediction_model'):
+            del self._prediction_model
+
+    def save(self, save_path):
+        """保存整个模型（包括配置、窗口、权重、编译配置）"""
         check_is_fitted(self)
-        joblib.dump(self, filepath)
-        print(f"完整模型已保存到: {filepath}")
+
+        os.makedirs(save_path, exist_ok=True)
+
+        # 1. 保存模型权重 （TF格式，支持大文件）
+        if not hasattr(self, '_prediction_model'):
+            self._prediction_model = self.reconstruct_model()
+
+        # 使用TF格式保存权重（自动分片）
+        weights_dir = os.path.join(save_path, 'model_weights')  # 文件夹放很很多文件
+        self._prediction_model.save_weights(weights_dir, save_format='tf')
+
+        # 2. 保存架构为Json
+        model_json = self._prediction_model.to_json()
+        with open(os.path.join(save_path, 'model_architecture.json'), 'w') as f:
+            f.write(model_json)
+
+        # 3. 保存配置信息
+        save_configs = {
+            'model_config': self.model_config,
+            'window_config': {
+                'input_width': self.window.input_width,
+                'label_width': self.window.label_width,
+                'shift': self.window.shift,
+                'label_columns': self.window.label_columns},
+            'compile_config': self._get_compile_config_for_save(),
+        }
+
+        joblib.dump(save_configs, os.path.join(save_path, 'saved_configs.pkl'))
+        print(f"完整模型已保存到: {save_path}")
+        return save_path
 
     @classmethod
-    def load(cls, filepath):
-        return joblib.load(filepath)
+    def load(cls, save_path):
+        """加载分片保存的模型"""
+
+        # 1. 加载配置
+        config_path = os.path.join(save_path, 'saved_configs.pkl')
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+
+        config_data = joblib.load(config_path)
+
+        # 2. 创建estimator实例
+        estimator = cls(model_config=config_data['model_config'])
+
+        # 3. 重建窗口生成器
+        estimator.window = WindowGenerator(**config_data['window_config'])
+
+        # 4. 从JSON重建模型结构
+        model_json_path = os.path.join(save_path, 'model_architecture.json')
+        if not os.path.exists(model_json_path):
+            raise FileNotFoundError(f"模型架构文件不存在: {model_json_path}")
+
+        with open(model_json_path, 'r') as f:
+            model_json = f.read()
+
+        # 处理自定义层(这里没有)
+        custom_objects = getattr(cls, 'custom_objects', {})
+        estimator.prediction_model_ = tf.keras.models.model_from_json(model_json, custom_objects=custom_objects)
+
+        # 5. 加载分片权重
+        weights_dir = os.path.join(save_path, 'model_weights')
+        if not os.path.exists(weights_dir):
+            raise FileNotFoundError(f"权重文件不存在: {weights_dir}")
+        # 自动加载所有分片
+        estimator.prediction_model_.load_weights(weights_dir)
+
+        # 6. 重新编译模型 （调用 model.evaluate()，需要编译信息/保持与训练时行为一致）
+        if 'compile_config' in config_data:
+            estimator.prediction_model_.complie(**config_data['compile_config'])
+        else:
+            # 如果没有保存编译配置，使用默认编译
+            estimator.prediction_model_.compile(
+                optimizer='adam',
+                loss='mse',
+                metrics=['mae']
+            )
+
+        # 7. 标记为已拟合
+        estimator.is_fitted_ = True
+
+        # training_model_可以为None，因为不需要重新训练
+        estimator.training_model_ = None
+
+        print(f"模型已从 {save_path} 加载")
+        return estimator
+
+    def __getstate__(self):
+        """序列化时只保留必要信息"""
+        state = self.__dict__.copy()
+
+        # 移除所有模型实例（通过save/load机制重建）
+        state['training_model_'] = None
+        state['prediction_model_'] = None
+        state['window'] = None
+
+        return state
+
+    def __setstate__(self, state):
+        """反序列化"""
+        self.__dict__.update(state)
+
+        if hasattr(self, 'weights_path') and os.path.exists(self.weights_path):
+            self.prediction_model_ = self.reconstruct_model()
+            self.window = self._create_window_generator()
 
 
 class EmbeddingConfig:
@@ -403,7 +395,7 @@ class EmbeddingConfig:
                 unique_ratio = n_categories / len(series)
 
                 base_config = {
-                    'input_dim': n_categories,
+                    'input_dim': n_categories,  # 不加1，因为已经预留了一个__UNKNOWN__
                     'input_length': input_shape[0],
                     'name': f'embedding_{col}'
                 }
@@ -418,78 +410,3 @@ class EmbeddingConfig:
                 embedding_configs[col] = base_config
 
             return embedding_configs
-
-    # def _extract_preprocessor_info(self, X):
-    #     """从预处理器提取完整的列信息"""
-    #     self.numeric_columns_ = []
-    #     self.categorical_columns_ = []
-    #     self.column_order_ = []
-    #     self.categorical_info_ = {}
-    #
-    #     # 获取原始特征名
-    #     if hasattr(self.preprocessor_, 'feature_names_in_'):
-    #         feature_names = self.preprocessor_.feature_names_in_
-    #     else:
-    #         # 降级方案：使用X的列名
-    #         feature_names = X.columns.tolist() if hasattr(X, 'columns') else []
-    #
-    #     # 解析 ColumnTransformer
-    #     if hasattr(self.preprocessor_, 'transformers'):
-    #         for name, transformer, columns in self.preprocessor_.transformers:
-    #             if name != 'remainder':
-    #                 # 记录列信息
-    #                 if 'num' in name:
-    #                     self.numeric_columns_.extend(columns)
-    #                 elif 'cat' in name:
-    #                     self.categorical_columns_.extend(columns)
-    #
-    #                 self.column_order_.extend(columns)
-    #
-    #                 # 提取分类信息
-    #                 if 'cat' in name and hasattr(transformer, 'classes_'):
-    #                     for col in columns:
-    #                         self.categorical_info_[col] = {
-    #                             'num_categories': len(transformer.classes_),
-    #                             'classes': transformer.classes_
-    #                         }
-    #     else:
-    #         # 如果不是ColumnTransformer，降级处理
-    #         self._fallback_column_detection(X)
-
-    # def _build_model(self, input_shape, numeric_columns, categorical_columns, categorical_info):
-    #     inputs = tf.keras.layers.Input(shape=input_shape)
-    #
-    #     # 在模型内部拆分数值和分类特征
-    #     if numeric_columns and categorical_columns:
-    #         # 动态计算索引
-    #         numeric_indices = [i for i, col in enumerate(self.all_columns)
-    #                            if col in numeric_columns]
-    #         categorical_indices = [i for i, col in enumerate(self.all_columns)
-    #                                if col in categorical_columns]
-    #
-    #         numeric_features = tf.gather(inputs, numeric_indices, axis=-1)
-    #         categorical_features = tf.gather(inputs, categorical_indices, axis=-1)
-    #
-    #         # 处理分类特征
-    #         embedded_features = []
-    #         for i, (col_name, idx) in enumerate(zip(categorical_columns, categorical_indices)):
-    #             # 从categorical_features中提取单列
-    #             single_cat = categorical_features[:, :, i:i + 1]
-    #             single_cat_flat = tf.keras.layers.Reshape((input_shape[0],))(single_cat)
-    #
-    #             col_info = categorical_info[col_name]
-    #             embedding = tf.keras.layers.Embedding(
-    #                 col_info['num_categories'],
-    #                 col_info['embedding_dim'],
-    #                 input_length=input_shape[0]
-    #             )(single_cat_flat)
-    #             embedded_features.append(embedding)
-    #
-    #         # 合并特征
-    #         if embedded_features:
-    #             all_embedded = tf.keras.layers.Concatenate(axis=-1)(embedded_features)
-    #             combined = tf.keras.layers.Concatenate(axis=-1)([numeric_features, all_embedded])
-    #         else:
-    #             combined = numeric_features
-    #     else:
-    #         combined = inputs

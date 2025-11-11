@@ -9,10 +9,17 @@ def TrainingModel(model_name: str,
                   model,  # tf.keras.models
                   trainset,
                   valset,
-                  weights_path,
+                  weights_dir,  # 目录
                   epochs: int = 20,  # 总轮数
                   verbose: int = 2,
                   ):
+    # 确保权重保存目录存在
+    os.makedirs(weights_dir, exist_ok=True)
+
+    # 构建完整的检查点路径（分片格式需要目录）
+    checkpoint_dir = weights_dir
+    checkpoint_prefix = os.path.join(checkpoint_dir, 'ckpt')
+
     record = model.fit(
         trainset,  # x,y
         valset,
@@ -26,14 +33,15 @@ def TrainingModel(model_name: str,
                                              min_delta=0.00001,  # 设置最小改善阈值
                                              restore_best_weights=True),
 
-            # 模型检查点：保存最佳模型
+            # 模型检查点：使用分片格式保存权重
             tf.keras.callbacks.ModelCheckpoint(
-                filepath=weights_path,  # 保存路径
+                filepath=checkpoint_prefix,  # 使用前缀而不是完整路径
                 monitor='val_loss',  # 监控指标
                 save_best_only=True,  # 只保存最佳模型
                 save_weights_only=True,  # False 保存整个模型（包括结构）,True 保存参数
                 verbose=1,  # 显示保存信息
-                save_freq='epoch'  # 默认就是每个epoch保存，可以改为按批次保存
+                save_freq='epoch',  # 默认就是每个epoch保存，可以改为按批次保存
+                save_format='tf'  # 明确指定使用TF格式（分片）
             ),
 
             # 添加学习率调度 提升训练效果
@@ -46,12 +54,21 @@ def TrainingModel(model_name: str,
             )
         ]
     )
+    # 训练完成后，确定最佳权重文件
+    # 对于分片格式，需要找到最新的检查点
+    latest_checkpoint = tf.train.latest_checkpoint(checkpoint_dir)
+
+    if latest_checkpoint:
+        print(f"最佳模型已经保存到：{latest_checkpoint}")
+        model.load_weights(latest_checkpoint)
+    else:
+        print("警告：未找到检查点文件")
 
     """训练过程可视化"""
     # record.history 为字典对象，包含训练过程中的loss的测量指标等记录项
     history_plot(history=record, model_name=model_name)
 
-    return record
+    return record, latest_checkpoint
 
 # 一般训练规律 损失值：
 # train loss 不断下降   validation loss不断下降---网络仍在学习

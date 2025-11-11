@@ -1,6 +1,6 @@
 import tempfile
 
-from data.feature_engineering.scalers import (UnifiedFeatureScaler)
+from data.feature_engineering.feature_scaling import UnifiedFeatureScaler
 import pandas as pd
 import numpy as np
 
