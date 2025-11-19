@@ -1,4 +1,4 @@
-from ..evaluation import history_plot
+from evaluation.model_visualization import history_plot
 import os
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'

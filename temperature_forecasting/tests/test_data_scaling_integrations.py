@@ -177,11 +177,11 @@ class TestUnifiedFeatureScalerFunctional:
         scaler._process_params_config(X)
 
         # 验证配置解析正确
-        assert scaler.params_info['T']['params_method'] == 'minmax'
-        assert scaler.params_info['W']['params_method'] == 'minmax'
-        assert scaler.params_info['W']['params_config']['feature_range'] == (-1, 1)
-        assert scaler.params_info['V']['params_method'] == 'minmax'
-        assert scaler.params_info['V']['params_config']['feature_range'] == (0, 1)
+        assert scaler.params_info_['T']['params_method'] == 'minmax'
+        assert scaler.params_info_['W']['params_method'] == 'minmax'
+        assert scaler.params_info_['W']['params_config']['feature_range'] == (-1, 1)
+        assert scaler.params_info_['V']['params_method'] == 'minmax'
+        assert scaler.params_info_['V']['params_config']['feature_range'] == (0, 1)
 
     def test_edge_cases_and_boundary_conditions(self):
         """测试边界条件和边缘情况"""

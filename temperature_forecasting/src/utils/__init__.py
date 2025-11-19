@@ -1,2 +1,2 @@
-from .config import TensorFlowConfig
+from .tensorflow_config import TensorFlowConfig
 from .debug_controller import DebugController

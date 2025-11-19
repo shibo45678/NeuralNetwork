@@ -1,8 +1,11 @@
+import copy
 import os
+import warnings
 from typing import List, Dict, Union
 
 import numpy as np
 import pandas as pd
+import pytest
 from joblib import Memory
 from pydantic import BaseModel, field_validator, model_validator, Field
 from sklearn.pipeline import Pipeline
@@ -87,7 +90,7 @@ class ProcessorConfig(BaseModel):  # 对应数据结构中的一个字典
 
 class ProcessorConfigs(BaseModel):
     """完整的处理器配置列表"""
-    configs: List[ProcessorConfig] = Field(..., description="处理器配置列表")  # 保证了列表存在
+    configs_: List[ProcessorConfig] = Field(..., description="处理器配置列表")  # 保证了列表存在
 
     @model_validator(mode='after')
     def validate_cross_config_overlap(self):
@@ -95,7 +98,7 @@ class ProcessorConfigs(BaseModel):
         all_instances = []
         duplicate_instances = []
 
-        for config in self.configs:
+        for config in self.configs_:
             for instance in config.obj_list:
                 instance_id = id(instance)
                 if instance_id in [id(existing) for existing in all_instances]:
@@ -110,7 +113,7 @@ class ProcessorConfigs(BaseModel):
     @classmethod
     def from_list(cls, config_list: List):
         """从列表创建配置"""
-        return cls(configs=config_list)
+        return cls(configs_=config_list)
 
     def __iter__(self):
         return iter(self.configs)
@@ -126,13 +129,17 @@ class ProcessorConfigs(BaseModel):
 class CompletePreprocessor:
 
     def __init__(self, processor_configs: Union[List[Dict], ProcessorConfigs]):
-        self.processor_configs = self._initialize_processor_config(processor_configs)
-        self.pipelines = {}
-        self.fitted_cleaners = {}  # 拟合的cleaner也记录下，防止预测是processor_configs改变
+        self.processor_configs = processor_configs
+        self.pipelines_ = {}
+        self.validate_processor_configs_ = self._get_processor_configs()
+        self.processor_classes_ = {}  # 保存处理器类信息
+
+    def _get_processor_configs(self):
+        return self._initialize_processor_config(self.processor_configs)
 
     def _initialize_processor_config(self, processor_configs) -> ProcessorConfigs:
         if processor_configs is None:
-            return ProcessorConfigs(configs=[])
+            return ProcessorConfigs(configs_=[])
         elif isinstance(processor_configs, ProcessorConfigs):
             return processor_configs
         elif isinstance(processor_configs, list):
@@ -145,10 +152,10 @@ class CompletePreprocessor:
     def train(self, features, labels=None):
         features_temp, labels_temp = features, labels
 
-        for idx, part in enumerate(self.processor_configs):
-            print(f"实际类型: {type(part)}")
-            print(f"是否是字典: {isinstance(part, dict)}")
-            print(f"是否是ProcessorConfig: {isinstance(part, ProcessorConfig)}")
+        for idx, part in enumerate(self.validate_processor_configs_.configs_):
+            logger.info(f"实际类型: {type(part)}")
+            logger.info(f"是否是字典: {isinstance(part, dict)}")
+            logger.info(f"是否是ProcessorConfig: {isinstance(part, ProcessorConfig)}")
 
             class_obj_list = part.obj_list
             change = part.len_change
@@ -157,49 +164,72 @@ class CompletePreprocessor:
                 continue  # 跳过空配置
 
             if change:
-                # 记录一下用过的cleaner里面的类的实例
-                fitted_cleaners = []
+                # 保存cleaner初始化参数等信息
+                processor_info_list = []
 
-                for cleaner in class_obj_list:
+                for i, cleaner in enumerate(class_obj_list):
                     old = len(features_temp)
-
                     features_temp, labels_temp = cleaner.learn_process(features_temp, labels_temp)
-                    fitted_cleaners.append(cleaner)
-
                     new = len(features_temp)
-                    print(f"第{idx + 1}步完成: {old} -> {new} 样本")
 
-                self.fitted_cleaners[f'cleaner_{idx + 1}'] = fitted_cleaners  # 阶段包含多个cleaners
+                    # 保存处理类信息和初始化参数（用于后续创建新实例）
+                    processor_info = {
+                        'class': type(cleaner),
+                        'init_params': getattr(cleaner, '_init_params', {}),  # 如果有初始化参数
+                        # 'trained_state': getattr(cleaner, 'get_state', lambda: {})(),  # 获取训练状态（暂无用，兜底lambda）
+                    }
+
+                    processor_info_list.append(processor_info)
+                    logger.info(f"stage{idx}，第{i}步完成: {old} -> {new} 样本")
+
+                self.processor_classes_[f'cleaner_{idx}'] = processor_info_list
+
 
             else:
                 # 创建pipeline 并缓存
-                cachedir = f'./pipeline_cache/pipeline_{idx + 1}'
-                if not os.path.exists(cachedir):
-                    os.makedirs(cachedir)
+                # cachedir = f'./pipeline_cache/pipeline_{idx + 1}'
+                # if not os.path.exists(cachedir):
+                #     os.makedirs(cachedir)
+                #
+                # memory = Memory(location=cachedir, verbose=0)
 
-                memory = Memory(location=cachedir, verbose=0)
+                steps = [(f'engineer_{i}', engineer) for i, engineer in enumerate(class_obj_list)]
 
-                steps = [(f'engineer_{i + 1}', engineer) for i, engineer in enumerate(class_obj_list)]
-
-                pipeline = Pipeline(steps, memory=memory)
+                pipeline = Pipeline(steps,)# memory=memory
 
                 old = features_temp.shape
                 features_temp = pipeline.fit_transform(features_temp, labels_temp)
                 new = features_temp.shape
-                print(f"第{idx + 1}步完成: 生成 pipeline，sklearn pipeline不改变数据形状。数据形状:{old} -> {new}")
 
-                self.pipelines[f'pipeline_{idx + 1}'] = pipeline
+                # 添加详细的调试信息
+                logger.info(f"Pipeline {idx} 步骤: {[name for name, _ in steps]}")
+
+                # 检查每个转换器的训练状态
+                for step_name, transformer in pipeline.steps:
+                    if hasattr(transformer, 'n_features_in_'):
+                        logger.info(f"  {step_name}: 训练特征数 = {transformer.n_features_in_}")
+                    if hasattr(transformer, 'classes_'):
+                        logger.info(f"  {step_name}: 类别数 = {len(transformer.classes_)}")
+
+                self.pipelines_[f'pipeline_{idx}'] = pipeline
+
+
+                logger.info(
+                    f"stage{idx}完成: 生成 pipeline，sklearn pipeline不改变数据形状。数据形状:{old} -> {new}")
+
+                self.pipelines_[f'pipeline_{idx}'] = pipeline
 
         return features_temp, labels_temp
 
-    def transform(self, features, labels=None):
-        if not self.fitted_cleaners and not self.pipelines:
+    def transform_predict(self, features, labels=None):
+
+        if not self.processor_classes_ and not self.pipelines_:
             logger.info("请先调用 train() 方法，获取必要的训练数据")
-            return raw_data, labels
+            return features, labels
 
         features_temp, labels_temp = features, labels
 
-        for idx, part in enumerate(self.processor_configs):
+        for idx, part in enumerate(self.validate_processor_configs_.configs_):
 
             change = part.len_change
             class_obj_list = part.obj_list
@@ -207,11 +237,18 @@ class CompletePreprocessor:
                 continue
 
             if change:
-                # 使用已训练的cleaners进行转换
-                for cleaner in self.fitted_cleaners.get(f'cleaner_{idx}', []):
-                    features_temp, labels_temp = cleaner.learn_process(features_temp, labels_temp)
+                # 使用新的cleaners实例进行转换
+                cleaners_info_list = self.processor_classes_.get(f'cleaner_{idx}',[])
+                for cleaner in cleaners_info_list:
+                    # 获取该类新实例
+                    cleaner_class = cleaner.get('class')
+                    cleaner_init_params = cleaner.get('init_params',{})
+
+                    new_cleaner = cleaner_class(**cleaner_init_params)
+                    features_temp, labels_temp = new_cleaner.learn_process(features_temp, labels_temp)
+
             else:
-                pipeline = self.pipelines.get(f'pipeline_{idx}')
+                pipeline = self.pipelines_.get(f'pipeline_{idx}')
                 if pipeline:
                     features_temp = pipeline.transform(features_temp)
 
@@ -219,7 +256,7 @@ class CompletePreprocessor:
 
     def get_all_attributes(self):
         all_attributes = {}  # {pipeline_1: steps_info}  steps_info={step_name:[attributes]}
-        for name, pipeline in self.pipelines.items():
+        for name, pipeline in self.pipelines_.items():
             all_attributes[name] = self._get_all_steps_info(pipeline)
         return all_attributes
 
@@ -244,33 +281,57 @@ class CompletePreprocessor:
     def get_specific_attribute(self, idx, step_name, attribute_name):
         """获取指定步骤的特定属性"""
         try:
-            step = self.pipelines.get(f'pipeline_{idx}').named_steps[step_name]
+            step = self.pipelines_.get(f'pipeline_{idx}').named_steps[step_name]
             return getattr(step, attribute_name)
         except(KeyError, AttributeError) as e:
-            print(f"获取属性失败: {e}")
+            warnings.warn(f"获取属性失败: {e}")
             return None
 
 
-
-if __name__ == '__main__':
-    d = {'feature1': np.random.normal(0, 1, 9),
+def test_completepreprocessor():
+    np.random.seed(42)
+    d = {'feature1': np.random.randint(0, 100, 9),
          'feature2': ['a', 'b', 'c', 'c', 'a', 'b', 'c', 'a', 'b']}
     raw_data = pd.DataFrame(d)
     labels = pd.Series([0, 1, 1, 1, 1, 3, 6, 7, 8])
 
+    new_data = pd.DataFrame({'feature1': [2, 1, 1, 2, 3],
+                             'feature2':['a','b','b','c','d']})
+    new_labels = pd.Series([0, 1, 1, 1, 1])
+
+    config = {
+        'transformers': [{'standard': {'columns': ['feature1']}}],
+        'skip_scale': ['feature2']}
+
     configs2 = [{'obj_list': [RemoveDuplicates()], 'len_change': True},
-                {'obj_list': [UnifiedFeatureScaler(algorithm='cnn'),
-                              CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__')],
+                {'obj_list': [UnifiedFeatureScaler(method_config=config, algorithm='cnn'),
+                              ], # CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__')
                  'len_change': False}]
+
     obj = CompletePreprocessor(configs2)
-    obj.train(raw_data, labels)
+    result=obj.train(raw_data, labels)
+    new_result = obj.transform_predict(new_data, new_labels)
+
+    logger.debug("转换的训练数据应该：")
+    with pytest.raises(ValueError):
+        assert len(result) == 4
+
+    logger.debug("转换的新数据不应该为空：")
+    assert new_result is not None
+
+
+    logger.debug("转换的新数据应该要能去重：")
+    with pytest.raises(ValueError):
+        assert len(new_result) == 4
+
+    logger.debug("可以提取特定步骤的属性")
     all_attributes = obj.get_all_attributes()
-    print(all_attributes)
+    assert 'numeric_columns_' in all_attributes
 
-    b = obj.get_specific_attribute(2, 'engineer_1', 'numeric_columns_')
-    print(f'应该结果是：[feature1] ，结果{b}')
+    b = obj.get_specific_attribute('1', 'engineer_0', 'numeric_columns_')
+    logger.debug(f'new_data应该结果是：[feature1] ，结果{b}')
+    assert b == ['feature1']
 
-    a = obj.get_specific_attribute(2, 'engineer_2', 'categorical_columns_')
-    print(f'应该结果是：[feature2] ，结果{a}')
 
-    # features_temp, labels_temp = obj.transform(raw_data, labels)
+if __name__ == '__main__':
+    pytest.main([__file__, "-v"])

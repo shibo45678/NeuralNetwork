@@ -135,8 +135,8 @@ class TestMissingValueHandler:
         print("重要特征列表:", imputer.get_important_features(result))
 
         # 验证重要列被标记
-        assert 'user_id' in imputer.missing_indicator
-        assert 'transaction_id' in imputer.missing_indicator
+        assert 'user_id' in imputer.missing_indicator_
+        assert 'transaction_id' in imputer.missing_indicator_
         print("✅ 重要列处理测试通过")
 
     def test_skip_fill_columns(self):
@@ -198,7 +198,7 @@ class TestMissingValueHandler:
 
         print("分类列处理结果:")
         print(result)
-        print("缺失指示器:", imputer.missing_indicator)
+        print("缺失指示器:", imputer.missing_indicator_)
 
         # 验证填充
         assert result['department'].isna().sum() == 0, "department列应该没有缺失值"
@@ -334,8 +334,8 @@ class TestMissingValueHandler:
         result = imputer.transform(df)
 
         print("智能填充结果:")
-        print(f"normal_col 填充值: {imputer.columns_info['normal_col'][0]['fill_value']}")
-        print(f"skewed_col 填充值: {imputer.columns_info['skewed_col'][0]['fill_value']}")
+        print(f"normal_col 填充值: {imputer.columns_info_['normal_col'][0]['fill_value']}")
+        print(f"skewed_col 填充值: {imputer.columns_info_['skewed_col'][0]['fill_value']}")
         print("缺失值统计:", result.isna().sum())
 
         assert result['normal_col'].isna().sum() == 0  # 智能填充只覆盖15%
@@ -368,7 +368,7 @@ class TestMissingValueHandler:
         result = imputer.transform(df)
 
         print("缺失指示器测试结果:")
-        print("缺失指示器列表:", imputer.missing_indicator)  # normal_col不缺失的列在缺失指示器内
+        print("缺失指示器列表:", imputer.missing_indicator_)  # normal_col不缺失的列在缺失指示器内
         print("重要列列表:", imputer.get_important_features(df))
         # 验证缺失指示器列存在
         assert 'important_col_missing_indicator' in result.columns

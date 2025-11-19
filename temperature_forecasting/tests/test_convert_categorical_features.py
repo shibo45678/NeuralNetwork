@@ -42,7 +42,7 @@ def test_process_categorical_columns():
     # 测试场景1：自动检测分类列
     print("测试场景1: 自动检测分类列")
     print("-" * 30)
-    processor1 = ConvertCategoricalColumns(cols=None)
+    processor1 = ConvertCategoricalColumns(categorical_columns=None)
     result1 = processor1.fit_transform(test_data)
     print(f"处理后的数据形状: {result1.shape}")
     print(f"处理后的数据列: {result1.columns.tolist()}")
@@ -54,7 +54,7 @@ def test_process_categorical_columns():
     # 测试场景2：指定要处理的列
     print("测试场景2: 指定处理列")
     print("-" * 30)
-    processor2 = ConvertCategoricalColumns(cols=['season', 'weather'])
+    processor2 = ConvertCategoricalColumns(categorical_columns=['season', 'weather'])
     result2 = processor2.fit_transform(test_data)
     print(f"处理后的数据形状: {result2.shape}")
     print(f"处理后的数据列: {result2.columns.tolist()}")
@@ -66,7 +66,7 @@ def test_process_categorical_columns():
     print("-" * 30)
     pipeline = Pipeline([
         ('categorical_processor', ConvertCategoricalColumns(
-            cols=['season', 'weather','city', 'Date Time']
+            categorical_columns=['season', 'weather','city', 'Date Time']
         ))
     ])
 
@@ -97,7 +97,7 @@ def test_process_categorical_columns():
     # 测试场景4：处理不存在的列
     print("测试场景4: 处理不存在的列")
     print("-" * 30)
-    processor4 = ConvertCategoricalColumns(cols=['nonexistent_col', 'season'])
+    processor4 = ConvertCategoricalColumns(categorical_columns=['nonexistent_col', 'season'])
     result4 = processor4.fit_transform(test_data)
     print(f"处理后的数据形状: {result4.shape}")
     print(f"result3处理后的数据列: {result4.columns.tolist()}")

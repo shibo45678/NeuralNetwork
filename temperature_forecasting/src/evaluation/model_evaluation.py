@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from typing import Dict
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix
-from ..data.windows import WindowGenerator
+from data.windows import WindowGenerator
 
 
 class ModelEvaluation:

@@ -26,7 +26,7 @@ class TestUnifiedFeatureScalerIntegration:
         predictions = pipeline.predict(X_df)
 
         assert len(predictions) == len(y)
-        assert hasattr(pipeline.named_steps['scaler'], 'scaling_config')
+        assert hasattr(pipeline.named_steps['scaler'], 'scaling_config_')
 
     def test_with_real_algorithm_compatibility(self):
         """测试与真实算法的兼容性"""

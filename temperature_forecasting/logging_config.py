@@ -1,4 +1,4 @@
-import logging
+
 import logging.config
 
 LOGGING_CONFIG = {
@@ -16,7 +16,7 @@ LOGGING_CONFIG = {
     # 2. 定义输出目的地（日志输出到哪里）
     'handlers': {
         'default': {
-            'level': 'INFO',  # 处理INFO及以上级别的消息
+            'level': 'DEBUG',  # 调整1
             'class': 'logging.StreamHandler',  # 输出到控制台
             'formatter': 'standard'  # 使用上面的格式
         }
@@ -26,14 +26,24 @@ LOGGING_CONFIG = {
     'loggers': {
         '': {  # 根logger - 所有模块的默认配置
             'handlers': ['default'],
-            'level': 'INFO',  # 默认只显示INFO及以上
+            'level': 'DEBUG',  # 调整2
             'propagate': True  # 向上传递日志消息
         },
-        # 'data.transformers': {  # 专门为data.transformers模块配置
-        #     'handlers': ['default'],
-        #     'level': 'DEBUG',  # 显示DEBUG及以上（更详细）
-        #     'propagate': False  # 不向上传递，避免重复
-        # },
+        'pipelines.preprocess_pipeline': {  # 专门为pipelines.preprocess_pipeline模块配置
+            'handlers': ['default'],
+            'level': 'DEBUG',  # 显示WARNING及以上（更详细）
+            'propagate': False  # 不向上传递，避免重复
+        },
+        'data.feature_engineering.feature_generation_from_numeric': {
+            'handlers': ['default'],
+            'level': 'WARNING',  # 显示WARNING及以上（更详细）
+            'propagate': False
+        },
+        'data.feature_engineering.feature_generation_from_time': {
+            'handlers': ['default'],
+            'level': 'DEBUG',  # 显示WARNING及以上（更详细）
+            'propagate': False
+        },
         'sklearn': {  # 第三方库sklearn的配置
             'handlers': ['default'],
             'level': 'WARNING',  # 只显示WARNING及以上（减少噪音）
@@ -42,13 +52,13 @@ LOGGING_CONFIG = {
     }
 }
 
-if __name__== "__main__":
+if __name__ == "__main__":
     # test_logging.py
     import logging.config
-    import logging_config
+    from logging_config import LOGGING_CONFIG
 
     # 设置日志
-    logging.config.dictConfig(logging_config.LOGGING_CONFIG)
+    logging.config.dictConfig(LOGGING_CONFIG)
 
     # 测试不同模块的日志
     logger1 = logging.getLogger("data.transformers")

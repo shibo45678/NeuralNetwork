@@ -6,7 +6,7 @@ from sklearn.utils.validation import check_is_fitted
 from data.decorator import validate_input
 from models.cnn import EnhancedCnnModel
 from models.lstm import EnhancedLstmModel
-from training import TrainingModel
+from training.training_models import TrainingModel
 from data.windows import WindowGenerator
 from evaluation.model_evaluation import ModelEvaluation
 from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin

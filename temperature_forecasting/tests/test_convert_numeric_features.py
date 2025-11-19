@@ -3,8 +3,6 @@ import pandas as pd
 import numpy as np
 from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from unittest.mock import patch
 import warnings
 from data.data_preparation.convert_numeric_features import ConvertNumericColumns
 
@@ -38,7 +36,7 @@ class TestConvertNumericColumns:
     def test_initialization_custom_params(self):
         """测试自定义参数初始化"""
         transformer = ConvertNumericColumns(
-            cols=['col1', 'col2'],
+            numeric_columns=['col1', 'col2'],
             preserve_object_integer_types=False,
             exclude_cols=['time_col'],
             pass_through=True
@@ -50,7 +48,7 @@ class TestConvertNumericColumns:
 
     def test_fit_with_specified_columns(self):
         """测试指定列名的拟合过程"""
-        transformer = ConvertNumericColumns(cols=['int_col', 'float_col'])
+        transformer = ConvertNumericColumns(numeric_columns=['int_col', 'float_col'])
         transformer.fit(self.sample_data)
 
         assert 'int_col' in transformer.numeric_columns
@@ -60,19 +58,19 @@ class TestConvertNumericColumns:
 
     def test_fit_with_none_columns_auto_detection(self):
         """测试自动检测数值列"""
-        transformer = ConvertNumericColumns(cols=None, exclude_cols=['exclude_col'])
+        transformer = ConvertNumericColumns(numeric_columns=None, exclude_cols=['exclude_col'])
         transformer.fit(self.sample_data)
 
         expected_cols = ['int_col', 'float_col']
         for col in expected_cols:
-            assert col in transformer.numeric_columns
-        assert 'exclude_col' not in transformer.numeric_columns
+            assert col in transformer.actual_columns_
+        assert 'exclude_col' not in transformer.actual_columns_
 
     def test_fit_with_missing_columns_warning(self):
         """测试处理不存在的列时发出警告"""
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            transformer = ConvertNumericColumns(cols=['int_col', 'nonexistent_col'])
+            transformer = ConvertNumericColumns(numeric_columns=['int_col', 'nonexistent_col'])
             transformer.fit(self.sample_data)
 
             assert len(w) == 1
@@ -81,7 +79,7 @@ class TestConvertNumericColumns:
 
     def test_transform_basic_conversion(self):
         """测试基本类型转换功能"""
-        transformer = ConvertNumericColumns(cols=['str_numeric_col', 'str_mixed_col1'])
+        transformer = ConvertNumericColumns(numeric_columns=['str_numeric_col', 'str_mixed_col1'])
         transformer.fit(self.sample_data)
 
         result = transformer.transform(self.sample_data)
@@ -104,7 +102,7 @@ class TestConvertNumericColumns:
         """测试(object对象里面的整数类型）保持功能"""
         # 测试保持整数类型
         transformer_preserve = ConvertNumericColumns(
-            cols=['str_mixed_col2'],
+            numeric_columns=['str_mixed_col2'],
             preserve_object_integer_types=True
         )
         transformer_preserve.fit(self.sample_data)
@@ -112,7 +110,7 @@ class TestConvertNumericColumns:
 
         # 测试不保持整数类型
         transformer_no_preserve = ConvertNumericColumns(
-            cols=['str_mixed_col2'],
+            numeric_columns=['str_mixed_col2'],
             preserve_object_integer_types=False
         )
         transformer_no_preserve.fit(self.sample_data)
@@ -125,7 +123,7 @@ class TestConvertNumericColumns:
     def test_transform_exclude_columns(self):
         """测试排除列功能"""
         transformer = ConvertNumericColumns(
-            cols=None,
+            numeric_columns=None,
             exclude_cols=['exclude_col', 'bool_col']
         )
         transformer.fit(self.sample_data)
@@ -146,7 +144,7 @@ class TestConvertNumericColumns:
 
     def test_transform_with_numeric_columns_empty(self):
         """测试无数值列需要处理的情况"""
-        transformer = ConvertNumericColumns(cols=[])
+        transformer = ConvertNumericColumns(numeric_columns=[])
         transformer.fit(self.sample_data)
         result = transformer.transform(self.sample_data)
 
@@ -154,7 +152,7 @@ class TestConvertNumericColumns:
 
     def test_fit_transform_integration(self):
         """测试拟合和转换的集成"""
-        transformer = ConvertNumericColumns(cols=['str_mixed_col1'])
+        transformer = ConvertNumericColumns(numeric_columns=['str_mixed_col1'])
         result = transformer.fit_transform(self.sample_data)
 
         assert 'str_mixed_col1' in result.columns
@@ -165,7 +163,7 @@ class TestConvertNumericColumns:
     def test_empty_dataframe(self):
         """测试空DataFrame处理"""
         empty_df = pd.DataFrame()
-        transformer = ConvertNumericColumns(cols=[])
+        transformer = ConvertNumericColumns(numeric_columns=[])
 
         with pytest.raises(ValueError):
             result = transformer.fit_transform(empty_df)
@@ -177,7 +175,7 @@ class TestConvertNumericColumns:
             'mixed_nan_col': ['1', np.nan, '3']
         })
 
-        transformer = ConvertNumericColumns(cols=['all_nan_col', 'mixed_nan_col'])
+        transformer = ConvertNumericColumns(numeric_columns=['all_nan_col', 'mixed_nan_col'])
         result = transformer.fit_transform(nan_data)
 
         assert pd.api.types.is_float_dtype(result['all_nan_col'])
@@ -190,7 +188,7 @@ class TestConvertNumericColumns:
             'scientific_notation': ['1.5e10', '2.3e-5']
         })
 
-        transformer = ConvertNumericColumns(cols=['large_int', 'scientific_notation'])
+        transformer = ConvertNumericColumns(numeric_columns=['large_int', 'scientific_notation'])
         result = transformer.fit_transform(large_data)
 
         assert result['large_int'].iloc[0] == 999999999999999
@@ -213,7 +211,7 @@ class TestConvertNumericColumns:
             'col.dotted': ['7', '8', '9']
         })
 
-        transformer = ConvertNumericColumns(cols=['col-with-dash', 'col with space', 'col.dotted'])
+        transformer = ConvertNumericColumns(numeric_columns=['col-with-dash', 'col with space', 'col.dotted'])
         result = transformer.fit_transform(special_data)
 
         for col in ['col-with-dash', 'col with space', 'col.dotted']:
@@ -233,7 +231,7 @@ class TestConvertNumericColumns:
 
         # 创建管道
         pipeline = Pipeline([
-            ('numeric_converter', ConvertNumericColumns(cols=['feature1', 'feature2'])),
+            ('numeric_converter', ConvertNumericColumns(numeric_columns=['feature1', 'feature2'])),
             ('classifier', RandomForestClassifier(n_estimators=10, random_state=42))
         ])
 
@@ -250,7 +248,7 @@ class TestConvertNumericColumns:
 
         pipeline = Pipeline([
             ('converter', ConvertNumericColumns(
-                cols=['str_numeric_col', 'str_mixed_col1'],
+                numeric_columns=['str_numeric_col', 'str_mixed_col1'],
                 exclude_cols=['exclude_col']
             ))
         ])
@@ -275,7 +273,7 @@ class TestConvertNumericColumns:
             'region': ['North', 'South', 'East']  # 非数值列
         })
 
-        transformer = ConvertNumericColumns(cols=['sales', 'profit'])
+        transformer = ConvertNumericColumns(numeric_columns=['sales', 'profit'])
         result = transformer.fit_transform(test_data)
 
         # 业务需求验证
@@ -294,7 +292,7 @@ class TestConvertNumericColumns:
             'with_nulls': ['1', None, '3', np.nan, '5']
         })
 
-        transformer = ConvertNumericColumns(cols=quality_data.columns.tolist())
+        transformer = ConvertNumericColumns(numeric_columns=quality_data.columns.tolist())
         result = transformer.fit_transform(quality_data)
 
         # 数据质量检查
@@ -316,7 +314,7 @@ class TestConvertNumericColumns:
             for i in range(5)
         })
 
-        transformer = ConvertNumericColumns(cols=large_data.columns.tolist())
+        transformer = ConvertNumericColumns(numeric_columns=large_data.columns.tolist())
 
         # 性能测试：确保在合理时间内完成
         import time
@@ -348,7 +346,7 @@ class TestConvertNumericColumns:
 
         numeric_cols = ['product_price', 'quantity', 'discount_percentage', 'customer_rating']
 
-        transformer = ConvertNumericColumns(cols=numeric_cols)
+        transformer = ConvertNumericColumns(numeric_columns=numeric_cols)
         result = transformer.fit_transform(ecommerce_data)
 
         # 验证业务计算
@@ -365,7 +363,7 @@ class TestConvertNumericColumns:
     def test_validate_input_decorator_compatibility(self):
         """测试与输入验证装饰器的兼容性"""
         # 这个测试验证装饰器不会干扰正常功能
-        transformer = ConvertNumericColumns(cols=['int_col', 'float_col'])
+        transformer = ConvertNumericColumns(numeric_columns=['int_col', 'float_col'])
 
         # 应该正常执行，不抛出异常
         result = transformer.fit_transform(self.sample_data)
@@ -380,9 +378,8 @@ class TestConvertNumericColumns:
 
         # 测试无效输入（取决于validate_input的具体实现）
         # 这里我们假设装饰器会验证输入类型
-        with pytest.raises((TypeError,ValueError)):
+        with pytest.raises((TypeError, ValueError)):
             transformer.fit(dict)  # 无效的列表输入
-
 
 
 if __name__ == "__main__":

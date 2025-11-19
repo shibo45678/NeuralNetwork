@@ -256,11 +256,11 @@ class TestUnifiedFeatureScalerUnit:
         # 手动调用内部方法进行测试
         scaler._process_params_config(X)
 
-        assert 'col1' in scaler.params_info
-        assert 'col2' in scaler.params_info
-        assert 'col3' in scaler.params_info
-        assert scaler.params_info['col3'].get('params_method') == 'user_skip'
-        assert 'col4' not in scaler.params_info
+        assert 'col1' in scaler.params_info_
+        assert 'col2' in scaler.params_info_
+        assert 'col3' in scaler.params_info_
+        assert scaler.params_info_['col3'].get('params_method') == 'user_skip'
+        assert 'col4' not in scaler.params_info_
 
 
 class TestSmartScalerSelector:
