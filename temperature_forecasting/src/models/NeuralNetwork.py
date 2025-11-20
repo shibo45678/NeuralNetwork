@@ -44,7 +44,7 @@ class TimeSeriesEstimator(BaseEstimator, RegressorMixin, ClassifierMixin):
         self.test_window_data = None
         self.window = self._create_window_generator()
 
-    def fit(self, X, y=None):
+    def fit(self, X:dict, y=None):
         # 写出数据源
         train_datasets = X['train_datasets']
         val_datasets = X['val_datasets']
