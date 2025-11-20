@@ -7,16 +7,19 @@
 # 缺失值填充 增加算法填充等
 # missing列logger 从提示改为报错 尽早暴露/结果无意义/
 # 统一下划线/标准化列有不存在需要提前验证
+import copy
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 import pandas as pd
+from sklearn.utils.validation import check_is_fitted
+
 from utils.tensorflow_config import TensorFlowConfig
 from models.NeuralNetwork import TimeSeriesEstimator
 from pipelines.preprocess_pipeline import CompletePreprocessor
 from data.data_preprocessing import TimeSeriesSplitter
 from data.data_preparation import (DataLoader, DescribeData, RemoveDuplicates, DeleteUselessCols, ProblemColumnsFixed,
                                    SpecialColumnsFixed, CheckExtreFeatures,
-                                   CustomNumericOutlier, handler,
+                                   NumericOutlierProcessor, detect_, handle_,
                                    CategoricalOutlierProcessor, NumericMissingValueHandler,
                                    CategoricalMissingValueHandler,
                                    ColumnsTypeIdentify,
@@ -29,7 +32,8 @@ from data.exploration import VisualizationForNeural
 import logging.config
 from logging_config import LOGGING_CONFIG
 import logging
-logger=logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
 
 
 def main():
@@ -49,15 +53,22 @@ def main():
         'path': '~/Python/NeuralNetwork/temperature_forecasting/data/intermediate',
         'filename': 'outliers.csv'}
 
-    func = partial(handler, threshold=0)
-    numeric_outliers_config = [
-        ('zscore', {'columns': ['T', 'Tpot', 'Tdew'], 'threshold': 3}),  # 前额常接近正态分布，Z-score效果好
-        ('iqr', {'columns': ['p', 'VPmax', 'VPact', 'VPdef'], 'threshold': 1.5}),  # 气压有明确的物理范围，IQR对中等离群值敏感
-        ('robust', {'columns': ['rh', 'sh', 'H2OC'], 'quantile_range': (5, 95)}),  # 分位数检测对分布偏斜
-        ('isolationforest', {'columns': ['rho', 'wd'], 'contamination': 0.025}),  # 对复杂分布效果好
-        ('custom', {'columns': ['wv', 'max. wv'], 'functions': [func, func]})
-    ]
-    numeric_handle_config = {'custom': ['wv', 'max. wv']}
+
+    numeric_outliers_config = {'detect_and_handle_config': [
+        {'zscore': {'columns': ['T', 'Tpot', 'Tdew'], 'handle_method': ['clip', 'clip', 'clip', ], 'threshold': 3}},
+        # 气温常接近正态分布，Z-score效果好
+        {'iqr': {'columns': ['p', 'VPmax', 'VPact', 'VPdef'], 'handle_method': ['clip', 'clip', 'clip', 'clip', ],
+                 'threshold': 1.5}},  # 气压有明确的物理范围，IQR对中等离群值敏感
+        {'robust':
+         {'columns': ['rh', 'sh', 'H2OC'], 'handle_method': ['clip', 'clip', 'clip', ], 'quantile_range': (5, 95)}},
+        # 分位数检测对分布偏斜
+
+        {'isolationforest': {'columns': ['rho', 'wd'], 'handle_method': ['clip', 'clip', ], 'contamination': 0.025,'random_state':42}},
+        # 对复杂分布效果好
+        {'custom': {'columns': ['wv', 'max. wv'], 'handle_method': ['custom', 'custom'], 'detect_function': partial(detect_, threshold=0),
+                    'handle_function': partial(handle_)}}],
+        'generate_outlier_indicator': ['T', 'p']
+    }
 
     categorical_outliers_config = {
         'rare_threshold': 0.01,
@@ -85,7 +96,7 @@ def main():
             {'minmax': {'columns': [], 'feature_range': (-1, 1)}},  # 相同方法，但是其他参数配置与前一配置不同，允许在下一行填写
             {'robust': {'columns': [], 'quantile_range': (10, 90)}}
         ],
-        'skip_scale': ['is_night','Day_sin','Day_cos','Year_sin','Year_cos']  # 跳过二分类列(数值型）/ 异常值标记列自动skip
+        'skip_scale': ['is_night', 'Day_sin', 'Day_cos', 'Year_sin', 'Year_cos']  # 跳过二分类列(数值型）/ 异常值标记列自动skip
     }
 
     output_config = {
@@ -103,35 +114,33 @@ def main():
     }
     # 先初始化 再延迟计算（lazy evaluation）
     preparation_configs = [
-        {'obj_list': [DescribeData(log_level="DEBUG"),DeleteUselessCols()], 'len_change': False},
+        {'obj_list': [DescribeData(log_level="DEBUG"), DeleteUselessCols()], 'len_change': False},
         {'obj_list': [RemoveDuplicates(download_config=download_duplicates_config)],
-                     'len_change': True},
+         'len_change': True},
         {'obj_list': [ColumnsTypeIdentify(),
                       ConvertCategoricalColumns(categorical_columns=[]),
                       ConvertNumericColumns(preserve_object_integer_types=True, exclude_cols=['Date Time']),
                       ProblemColumnsFixed(problem_columns=['wv']), SpecialColumnsFixed(problem_columns=['T']),  # wv 一样
                       CheckExtreFeatures(method_config=check_outliers_config,
                                          download_config=download_outliers_details_config),
-                      # 已考虑异常值对数据分布的影响
+
+                      NumericOutlierProcessor(method_config=numeric_outliers_config),
+                      CategoricalOutlierProcessor(method_config=categorical_outliers_config, strategy='consolidate'),
                       NumericMissingValueHandler(method_config=numeric_missing_config),
                       CategoricalMissingValueHandler(method_config=None, pass_through=True),
-
-                      CustomNumericOutlier(method_config=numeric_outliers_config, handle_config=numeric_handle_config),
-                      CategoricalOutlierProcessor(method_config=categorical_outliers_config, strategy='consolidate'),
-
-
                       ],
-                         'len_change': False},
+         'len_change': False},
 
         {'obj_list': [SystematicResampler(start_index=5, step=6, reset_index=True)], 'len_change': True},
 
         {'obj_list': [GenerationFromNumeric(dir_cols=['wd'], var_cols=['wv', 'max. wv']),
-                      ProcessTimeseriesColumns(interactive=False, auto_detect_string_format=True),  # 关闭交互式功能 + 开启自动检测时间列
+                      ProcessTimeseriesColumns(interactive=False, auto_detect_string_format=True),
+                      # 关闭交互式功能 + 开启自动检测时间列
                       BasedOnCorrSelector(pass_through=True),
                       UnifiedFeatureScaler(method_config=scaling_config, algorithm='lstm'),  # 自动根据数据分布及算法类型进行推荐标准化
                       CategoricalEncoding(handle_unknown='ignore', unknown_token='__UNKNOWN__'),
+                      VisualizationForNeural(pass_through=False),
                       ], 'len_change': False},
-        {'obj_list': [VisualizationForNeural()], 'len_change': False},
     ]
 
     # 1. 加载数据
@@ -145,12 +154,31 @@ def main():
     # 3. 数据预处理(生成训练、验证、预测数据）
     preprocessor = CompletePreprocessor(preparation_configs)
     features_temp_train = preprocessor.train(features=df_train, labels=None)
+
+    # 立即检查状态
+    print("=== 训练后立即检查 ===")
+    for name, pipeline in preprocessor.pipelines_.items():
+        print(f"{name}:")
+        try:
+            check_is_fitted(pipeline)
+            print("  ✓ Pipeline 整体已拟合")
+        except Exception as e:
+            print(f"  ✗ Pipeline 整体未拟合: {e}")
+
+        # 检查每个步骤
+        for step_name, transformer in pipeline.steps:
+            try:
+                check_is_fitted(transformer)
+                print(f"    ✓ {step_name} 已拟合")
+            except Exception as e:
+                print(f"    ✗ {step_name} 未拟合: {e}")
+
     features_temp_val = preprocessor.transform_predict(features=df_val, labels=None)
     features_temp_test = preprocessor.transform_predict(features=df_test, labels=None)
 
-    num_cols = preprocessor.pipelines.get_specific_attribute(5, 'engineer_4', 'numeric_columns_')  # 取第5个class的第4步的属性
-    cat_cols = preprocessor.pipelines.get_specific_attribute(5, 'engineer_5', 'categorical_columns_')
-    time_col = preprocessor.pipelines.get_specific_attribute(5, 'engineer_2', 'time_column_')
+    num_cols = preprocessor.get_specific_attribute(4, 'engineer_3', 'numeric_columns_')  # 取第5个class的第4步的属性
+    cat_cols = preprocessor.get_specific_attribute(4, 'engineer_4', 'categorical_columns_')
+    time_col = preprocessor.get_specific_attribute(4, 'engineer_1', 'time_column_')
 
     # 4. 并行模型训练、评估
     base_model_config = {'numeric_columns': num_cols,
@@ -194,23 +222,25 @@ def main():
 
     data = pd.DataFrame({'train_datasets': features_temp_train, 'val_datasets': features_temp_val})  # 训练要求验证集
 
-    def train_single_config(config, X, y):
+    def train_single_config(config, X, y, preprocessor, new_data):
         name = config.get('model_type')
         model = TimeSeriesEstimator(config)
+        X_copy = copy.deepcopy(X)
+        features_temp_val_copy = copy.deepcopy(features_temp_val)
 
         # 训练
-        model.fit(X, y=None)
+        model.fit(X_copy, y=None)
         model.save(f'./saved_{name}/timeseries_v1')
 
         # 重构、预测
-        predictions = model.predict(features_temp_test)  # # N天后加载使用load
+        predictions = model.predict(features_temp_val_copy)  # # N天后加载使用load
         print(f"生成 {len(predictions)} 个预测结果")
 
         # 逆转换
-        inverse_1 = preprocessor.pipelines.get('pipeline_5').named_steps['engineer_4'].inverse_transform(
+        inverse_1 = preprocessor.pipelines_.get('pipeline_4').named_steps['engineer_3'].inverse_transform(
             scaled_data=predictions, target_columns=['T', 'p'])
 
-        inverse_2 = preprocessor.pipelines.get('pipeline_5').named_steps['engineer_5'].inverse_transform(inverse_1)
+        inverse_2 = preprocessor.pipelines_.get('pipeline_4').named_steps['engineer_4'].inverse_transform(inverse_1)
 
         print(f"最终的数据：{inverse_2.head(10)}")
 
@@ -221,7 +251,8 @@ def main():
     failed_configs = []
     trained_models = []
     with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(train_single_config, config, data, y=None)
+        futures = [executor.submit(train_single_config, config, X=data, y=None, preprocessor=preprocessor,
+                                   new_data=features_temp_test)
                    for config in configs]
 
         for future, config in zip(futures, configs):
@@ -239,5 +270,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

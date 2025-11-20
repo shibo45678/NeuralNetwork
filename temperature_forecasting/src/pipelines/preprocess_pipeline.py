@@ -132,7 +132,7 @@ class CompletePreprocessor:
         self.processor_configs = processor_configs
         self.pipelines_ = {}
         self.validate_processor_configs_ = self._get_processor_configs()
-        self.processor_classes_ = {}  # 保存处理器类信息
+        self.processor_classes_ = {}  # 保存cleaner处理器类信息
 
     def _get_processor_configs(self):
         return self._initialize_processor_config(self.processor_configs)
@@ -153,9 +153,6 @@ class CompletePreprocessor:
         features_temp, labels_temp = features, labels
 
         for idx, part in enumerate(self.validate_processor_configs_.configs_):
-            logger.info(f"实际类型: {type(part)}")
-            logger.info(f"是否是字典: {isinstance(part, dict)}")
-            logger.info(f"是否是ProcessorConfig: {isinstance(part, ProcessorConfig)}")
 
             class_obj_list = part.obj_list
             change = part.len_change
@@ -180,7 +177,7 @@ class CompletePreprocessor:
                     }
 
                     processor_info_list.append(processor_info)
-                    logger.info(f"stage{idx}，第{i}步完成: {old} -> {new} 样本")
+                    logger.info(f"stage{idx}，生成 cleaner，自定义 cleaner 改变数据形状。第{i}步完成: {old} -> {new} 样本")
 
                 self.processor_classes_[f'cleaner_{idx}'] = processor_info_list
 
@@ -195,7 +192,7 @@ class CompletePreprocessor:
 
                 steps = [(f'engineer_{i}', engineer) for i, engineer in enumerate(class_obj_list)]
 
-                pipeline = Pipeline(steps,)# memory=memory
+                pipeline = Pipeline(steps,) # memory=memory
 
                 old = features_temp.shape
                 features_temp = pipeline.fit_transform(features_temp, labels_temp)

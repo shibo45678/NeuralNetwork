@@ -3,74 +3,190 @@ import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator,TransformerMixin
 
-class SmartOutlierProcessor(BaseEstimator, TransformerMixin):
-    def __init__(self, config_name='default'):
-        self.config_name = config_name
-        self.detection_functions = self._setup_detection_functions() # 初始化即可完成所有配置
+import numpy as np
+import pandas as pd
+from scipy import stats
+from sklearn.base import BaseEstimator, TransformerMixin
 
-    def _setup_detection_functions(self):
-        """基于配置名设置不同的检测函数"""
-        if self.config_name == 'strict':
-            return self._create_strict_handlers()
-        else:
-            return self._create_default_handlers()
 
-    def _create_strict_handlers(self):
-        """创建严格的异常值检测器"""
+class SmartOutlierDetector(BaseEstimator, TransformerMixin):
+    def __init__(self, auto_select=True, default_method='iqr',
+                 skew_threshold=1.0, kurtosis_threshold=3.0):
+        """
+        参数:
+        auto_select: 是否自动选择最佳方法
+        default_method: 自动选择失败时的默认方法 ('zscore', 'iqr', 'robust')
+        skew_threshold: 偏度阈值，超过则认为数据偏态
+        kurtosis_threshold: 峰度阈值，超过则认为数据重尾
+        """
+        self.auto_select = auto_select
+        self.default_method = default_method
+        self.skew_threshold = skew_threshold
+        self.kurtosis_threshold = kurtosis_threshold
+        self.selected_methods_ = {}
+        self.detection_stats_ = {}
 
-        def zscore_detector(series):
-            z_scores = np.abs((series - series.mean()) / series.std())
-            return z_scores > 2  # 判断条件
+    def _analyze_distribution(self, data):
+        """分析数据分布特征"""
+        if len(data) < 10:  # 数据太少，无法可靠分析
+            return {'method': 'iqr', 'reason': '数据量太少'}
 
-        def iqr_detector(series):
-            Q1 = series.quantile(0.25)
-            Q3 = series.quantile(0.75)
-            IQR = Q3 - Q1
-            return (series < (Q1 - 1.5 * IQR)) | (series > (Q3 + 1.5 * IQR))
+        # 计算统计量
+        skewness = stats.skew(data)
+        kurtosis = stats.kurtosis(data)
+        normality_p = stats.normaltest(data).pvalue if len(data) > 20 else 0
 
-        return {
-            'zscore': zscore_detector, # 返回闭包函数
-            'iqr': iqr_detector
+        stats_dict = {
+            'skewness': skewness,
+            'kurtosis': kurtosis,
+            'normality_p': normality_p,
+            'is_normal': normality_p > 0.05,
+            'is_skewed': abs(skewness) > self.skew_threshold,
+            'is_heavy_tailed': kurtosis > self.kurtosis_threshold,
+            'n_samples': len(data)
         }
 
-    def _create_default_handlers(self):
-        """创建默认的异常值检测器"""
-        # 类似的实现...
-        pass
+        return stats_dict
+
+    def _select_best_method(self, data, column_name):
+        """为单个列选择最佳异常值检测方法"""
+        stats_info = self._analyze_distribution(data)
+
+        # 决策逻辑
+        if stats_info['n_samples'] < 10:
+            method = 'iqr'
+            reason = '数据量少，使用稳健的IQR方法'
+
+        elif stats_info['is_normal'] and not stats_info['is_skewed']:
+            method = 'zscore'
+            reason = '数据接近正态分布，使用Z-score方法'
+
+        elif stats_info['is_skewed']:
+            method = 'iqr'
+            reason = f"数据偏态(偏度={stats_info['skewness']:.2f})，使用IQR方法"
+
+        elif stats_info['is_heavy_tailed']:
+            method = 'robust'
+            reason = f"数据重尾(峰度={stats_info['kurtosis']:.2f})，使用稳健Z-score方法"
+
+        else:
+            method = self.default_method
+            reason = f'使用默认方法: {self.default_method}'
+
+        return {
+            'method': method,
+            'reason': reason,
+            'stats': stats_info
+        }
 
     def fit(self, X, y=None):
-        # 可以基于训练数据调整参数
-        print(f"使用 {self.config_name} 配置进行拟合")
-        return self
+        """拟合数据，为每个列选择最佳方法"""
+        self.n_features_in_ = X.shape[1] if hasattr(X, 'shape') else len(X.columns)
 
-    def transform(self, X):
-        X_processed = X.copy()
-        outlier_masks = {}
+        if hasattr(X, 'columns'):
+            self.feature_names_in_ = X.columns.tolist()
+
+        self.selected_methods_ = {}
+        self.detection_stats_ = {}
 
         for col in X.columns:
-            for method_name, detector in self.detection_functions.items():
-                mask = detector(X[col])
-                outlier_masks[f"{col}_{method_name}"] = mask
-                # 在实际应用中，这里会有处理逻辑
+            data = X[col].dropna()
+            if len(data) == 0:
+                continue
 
-        print(f"处理了 {len(outlier_masks)} 种异常值检测")
-        return X_processed
+            if self.auto_select:
+                # 自动选择方法
+                result = self._select_best_method(data, col)
+                self.selected_methods_[col] = result['method']
+                self.detection_stats_[col] = result
+            else:
+                # 使用默认方法
+                self.selected_methods_[col] = self.default_method
+                self.detection_stats_[col] = {
+                    'method': self.default_method,
+                    'reason': '使用用户指定的默认方法',
+                    'stats': self._analyze_distribution(data)
+                }
+
+        return self
+
+    def _detect_outliers_zscore(self, data, threshold=3):
+        """Z-score 方法检测异常值"""
+        z_scores = np.abs(stats.zscore(data))
+        return z_scores > threshold
+
+    def _detect_outliers_iqr(self, data, threshold=1.5):
+        """IQR 方法检测异常值"""
+        Q1 = np.percentile(data, 25)
+        Q3 = np.percentile(data, 75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - threshold * IQR
+        upper_bound = Q3 + threshold * IQR
+        return (data < lower_bound) | (data > upper_bound)
+
+    def _detect_outliers_robust(self, data, threshold=3):
+        """稳健Z-score方法，使用中位数和MAD"""
+        median = np.median(data)
+        mad = stats.median_abs_deviation(data)
+        if mad == 0:  # 避免除零
+            mad = np.median(np.abs(data - median)) * 1.4826
+        robust_z = np.abs(0.6745 * (data - median) / mad)
+        return robust_z > threshold
+
+    def transform(self, X):
+        """检测异常值"""
+        check_is_fitted(self, 'n_features_in_')
+
+        outlier_results = {}
+
+        for col in X.columns:
+            if col not in self.selected_methods_:
+                continue
+
+            data = X[col].dropna()
+            if len(data) == 0:
+                outlier_results[col] = np.full(len(X), False)
+                continue
+
+            method = self.selected_methods_[col]
+
+            if method == 'zscore':
+                is_outlier = self._detect_outliers_zscore(data)
+            elif method == 'iqr':
+                is_outlier = self._detect_outliers_iqr(data)
+            elif method == 'robust':
+                is_outlier = self._detect_outliers_robust(data)
+            else:
+                # 回退到IQR
+                is_outlier = self._detect_outliers_iqr(data)
+
+            # 创建与原始数据相同长度的结果
+            full_is_outlier = np.full(len(X), False)
+            full_is_outlier[data.index] = is_outlier
+            outlier_results[col] = full_is_outlier
+
+        return outlier_results
+
+    def get_detection_report(self):
+        """获取检测方法选择报告"""
+        if not hasattr(self, 'selected_methods_'):
+            return "模型尚未拟合"
+
+        report = "异常值检测方法选择报告:\n"
+        report += "=" * 50 + "\n"
+
+        for col, method in self.selected_methods_.items():
+            stats_info = self.detection_stats_[col]
+            report += f"列: {col}\n"
+            report += f"  选择方法: {method}\n"
+            report += f"  原因: {stats_info['reason']}\n"
+            report += f"  统计量 - 偏度: {stats_info['stats']['skewness']:.2f}, "
+            report += f"峰度: {stats_info['stats']['kurtosis']:.2f}, "
+            report += f"正态性p值: {stats_info['stats']['normality_p']:.3f}\n\n"
+
+        return report
 
 
-# 创建完整的 Pipeline
-pipeline = Pipeline([
-    ('outlier_detection', SmartOutlierProcessor(config_name='strict')),
-])
-
-# 使用 Pipeline
-from sklearn.datasets import make_classification
-
-X, y = make_classification(n_samples=100, n_features=4, random_state=42)
-
-# 拟合和转换 - 所有参数都在类内部处理！
-X = pd.DataFrame(X)
-pipeline.fit(X)
-result = pipeline.transform(X)
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from data.data_preparation.check_extre_numeric_features import CheckExtreFeatures
